@@ -34,7 +34,7 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
     if (parts[0] === 'health') return json(200, { ok: true, service: 'vtology', version: '0.1.0' });
     if (parts[0] !== 'tenants' || !parts[1]) throw new HttpError(404, 'Not found.');
 
-    const userId = await authenticate(req, deps.jwtSecret);
+    const userId = await authenticate(req, deps);
     const ctx = await loadContext(deps, userId, parts[1]);
     const route = `${req.method} ${parts.slice(2).join('/')}`;
 

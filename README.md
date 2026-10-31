@@ -30,9 +30,9 @@ npm run typecheck
 
 ## Set up for real
 
-1. **Supabase**: create a project (the Mumbai region suits DPDP). Run the four files in `supabase/migrations/` in order, either in the SQL editor or with `supabase db push`.
+1. **Supabase**: create a project in South Asia (Mumbai). Paste `supabase/setup_all.sql` into the SQL editor and run it (choose "Run without RLS": the file enables RLS itself).
 2. **First tenant**: sign up a user under Authentication. Then run `supabase/bootstrap.sql` with your values.
-3. **Vercel**: import this repo and set the root directory to `apps/web`. Add `DATABASE_URL` and `SUPABASE_JWT_SECRET` as shown in `.env.example`.
+3. **Vercel**: import this repo and set the root directory to `apps/web`. Add `DATABASE_URL` and `SUPABASE_URL` as shown in `.env.example` (`SUPABASE_JWT_SECRET` only for projects on the legacy HS256 secret).
 4. **Call it**: sign in with Supabase Auth on the client and send `Authorization: Bearer <access_token>`.
 
 ## API

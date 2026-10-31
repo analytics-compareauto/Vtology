@@ -1,4 +1,4 @@
-import { jwtVerify } from 'jose';
+import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify, type JWTVerifyGetKey } from 'jose';
 import type { Industry, RoleCode } from '@vtology/core';
 import type { Db } from './db';
 
@@ -8,8 +8,10 @@ export class HttpError extends Error {
 
 export interface Deps {
   db: Db;
-  /** Supabase JWT secret (Project settings → API). */
-  jwtSecret: string;
+  /** Legacy Supabase JWT secret, for projects that sign tokens with HS256. */
+  jwtSecret?: string;
+  /** Project URL (https://<ref>.supabase.co), for projects that sign tokens with JWT signing keys. */
+  supabaseUrl?: string;
   now?: () => Date;
 }
 
@@ -25,13 +27,30 @@ export interface Ctx {
   bookCode: string | null;
 }
 
-/** Verify the Supabase access token and return the user id. */
-export async function authenticate(req: Request, jwtSecret: string): Promise<string> {
+const jwksCache = new Map<string, JWTVerifyGetKey>();
+function jwks(supabaseUrl: string): JWTVerifyGetKey {
+  const url = `${supabaseUrl.replace(/\/$/, '')}/auth/v1/.well-known/jwks.json`;
+  let set = jwksCache.get(url);
+  if (!set) { set = createRemoteJWKSet(new URL(url)); jwksCache.set(url, set); }
+  return set;
+}
+
+/** Verify the Supabase access token and return the user id. Supports both the legacy
+ *  shared secret (HS256) and Supabase JWT signing keys (ES256/RS256 via the project JWKS). */
+export async function authenticate(req: Request, deps: Pick<Deps, 'jwtSecret' | 'supabaseUrl'>): Promise<string> {
   const h = req.headers.get('authorization') ?? '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : '';
   if (!token) throw new HttpError(401, 'Sign in first: missing access token.');
   try {
-    const { payload } = await jwtVerify(token, new TextEncoder().encode(jwtSecret), { algorithms: ['HS256'] });
+    const { alg } = decodeProtectedHeader(token);
+    let payload;
+    if (alg === 'HS256') {
+      if (!deps.jwtSecret) throw new Error('HS256 token but no JWT secret configured');
+      ({ payload } = await jwtVerify(token, new TextEncoder().encode(deps.jwtSecret), { algorithms: ['HS256'] }));
+    } else {
+      if (!deps.supabaseUrl) throw new Error('asymmetric token but no Supabase URL configured');
+      ({ payload } = await jwtVerify(token, jwks(deps.supabaseUrl), { algorithms: ['ES256', 'RS256'] }));
+    }
     if (!payload.sub) throw new Error('no subject');
     return payload.sub;
   } catch {
