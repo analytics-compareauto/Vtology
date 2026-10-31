@@ -3,11 +3,38 @@ import { handle, createPostgresDb, type Db } from '@vtology/server';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/** Accept the connection string the way people actually paste it: stray quotes or spaces,
+ *  a leading "DATABASE_URL=", the [brackets] from Supabase's template, or a password with
+ *  symbols that are not percent-encoded. */
+function cleanDatabaseUrl(raw: string): string {
+  let s = raw.trim().replace(/^DATABASE_URL\s*=\s*/i, '').trim().replace(/^['"]|['"]$/g, '').trim();
+  const m = /^(postgres(?:ql)?:\/\/)([^:/@]+):(.*)@([^@/]+)(\/.*)?$/s.exec(s);
+  if (!m) return s;
+  const [, scheme, user, pass0, host, rest] = m;
+  let pass = pass0!;
+  if (pass.startsWith('[') && pass.endsWith(']')) pass = pass.slice(1, -1);
+  let decoded = pass;
+  try { decoded = decodeURIComponent(pass); } catch { /* raw symbols such as a lone % */ }
+  return `${scheme}${user}:${encodeURIComponent(decoded)}@${host}${rest ?? '/postgres'}`;
+}
+
+/** What is wrong with the connection string, without ever revealing the password. */
+function describeDatabaseUrl(raw: string): string {
+  const s = cleanDatabaseUrl(raw);
+  const issues: string[] = [];
+  if (!/^postgres(ql)?:\/\//.test(s)) issues.push('should start with postgresql://');
+  if (!/pooler\.supabase\.com/.test(s)) issues.push('should use the pooler address (…pooler.supabase.com)');
+  if (!/:6543\//.test(s)) issues.push('should use port 6543 (Transaction pooler)');
+  if (/YOUR-PASSWORD/i.test(s)) issues.push('still contains YOUR-PASSWORD: put your database password in its place');
+  if (!/^postgres(ql)?:\/\/postgres\.[a-z0-9]+:/.test(s)) issues.push('user should be postgres.<project-ref>');
+  return issues.length ? issues.join('; ') : 'format looks right';
+}
+
 let dbPromise: Promise<Db> | null = null;
 function db(): Promise<Db> {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is not set. Use the Supabase connection string (Connect → Transaction pooler).');
-  dbPromise ??= createPostgresDb(url);
+  dbPromise ??= createPostgresDb(cleanDatabaseUrl(url));
   return dbPromise;
 }
 
@@ -40,7 +67,8 @@ async function health(auth: boolean): Promise<Response> {
     }
   }
   const ok = database === 'connected' && auth;
-  return Response.json({ ok, service: 'vtology', database, stages, auth: auth ? 'configured' : 'SUPABASE_URL missing' }, { status: ok ? 200 : 503 });
+  const databaseUrl = process.env.DATABASE_URL && !ok ? describeDatabaseUrl(process.env.DATABASE_URL) : undefined;
+  return Response.json({ ok, service: 'vtology', database, databaseUrl, stages, auth: auth ? 'configured' : 'SUPABASE_URL missing' }, { status: ok ? 200 : 503 });
 }
 
 export const GET = route;
