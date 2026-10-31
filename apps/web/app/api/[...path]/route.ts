@@ -39,11 +39,32 @@ function describeDatabaseUrl(raw: string): string {
   return issues.length ? issues.join('; ') : 'format looks right';
 }
 
+/** The connection string to use. DATABASE_PASSWORD, when set, is kept separate so nobody has to
+ *  edit a password into the middle of a long address. Without a usable DATABASE_URL, the address
+ *  is built from SUPABASE_URL (Mumbai transaction pooler by default; DATABASE_HOST overrides). */
+function databaseUrl(): string | undefined {
+  const password = process.env.DATABASE_PASSWORD?.trim();
+  const raw = process.env.DATABASE_URL?.trim();
+  let url = raw ? cleanDatabaseUrl(raw) : '';
+  const ref = /https:\/\/([a-z0-9]+)\.supabase\.co/.exec(process.env.SUPABASE_URL ?? '')?.[1];
+  let parsed: URL | null = null;
+  try { parsed = url && /^postgres(ql)?:\/\//.test(url) ? new URL(url) : null; } catch { parsed = null; }
+  // A mangled address (e.g. the server name lost while editing) is rebuilt when we have what we need.
+  if (parsed && password && ref && !/^aws-\d+-[a-z0-9-]+\.pooler\.supabase\.com$/.test(parsed.hostname)) parsed = null;
+  if (!parsed && password && ref) {
+    const host = process.env.DATABASE_HOST?.trim() || 'aws-0-ap-south-1.pooler.supabase.com';
+    parsed = new URL(`postgresql://postgres.${ref}@${host}:6543/postgres`);
+  }
+  if (!parsed) return url || undefined;
+  if (password) parsed.password = encodeURIComponent(password);
+  return parsed.toString();
+}
+
 let dbPromise: Promise<Db> | null = null;
 function db(): Promise<Db> {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error('DATABASE_URL is not set. Use the Supabase connection string (Connect → Transaction pooler).');
-  dbPromise ??= createPostgresDb(cleanDatabaseUrl(url));
+  const url = databaseUrl();
+  if (!url) throw new Error('Set DATABASE_PASSWORD (and SUPABASE_URL) in Vercel.');
+  dbPromise ??= createPostgresDb(url);
   return dbPromise;
 }
 
@@ -59,7 +80,7 @@ async function route(req: Request): Promise<Response> {
 async function health(auth: boolean): Promise<Response> {
   let database = 'not configured';
   let stages: number | undefined;
-  if (process.env.DATABASE_URL) {
+  if (databaseUrl()) {
     try {
       const rows = await Promise.race([
         (await db()).admin.query<{ n: number }>('select count(*)::int as n from vt.stage_defs'),
@@ -76,8 +97,9 @@ async function health(auth: boolean): Promise<Response> {
     }
   }
   const ok = database === 'connected' && auth;
-  const databaseUrl = process.env.DATABASE_URL && !ok ? describeDatabaseUrl(process.env.DATABASE_URL) : undefined;
-  return Response.json({ ok, service: 'vtology', database, databaseUrl, stages, auth: auth ? 'configured' : 'SUPABASE_URL missing' }, { status: ok ? 200 : 503 });
+  const url = databaseUrl();
+  const databaseUrlCheck = url && !ok ? describeDatabaseUrl(url) : undefined;
+  return Response.json({ ok, service: 'vtology', database, databaseUrl: databaseUrlCheck, passwordSetSeparately: !!process.env.DATABASE_PASSWORD, stages, auth: auth ? 'configured' : 'SUPABASE_URL missing' }, { status: ok ? 200 : 503 });
 }
 
 export const GET = route;
