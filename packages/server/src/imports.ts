@@ -27,6 +27,12 @@ export async function importCsv(ctx: Ctx, req: ImportRequest): Promise<ImportRes
       [ctx.tenantId, req.mapping.sourceSystem, entity, req.fileName ?? null, mapped.rowCount, ctx.userId]);
     const batchId = batch!.id;
     let imported = 0;
+    const memo = new Map<string, Promise<string | null>>();
+    const lookup = (table: 'partners' | 'campaigns', tenantId: string, code: string | null) => {
+      const k = `${table}:${code}`;
+      if (!memo.has(k)) memo.set(k, lookupRow(sql, table, tenantId, code));
+      return memo.get(k)!;
+    };
 
     for (const [i, r] of mapped.records.entries()) {
       const rowNo = i + 2;
@@ -57,8 +63,8 @@ export async function importCsv(ctx: Ctx, req: ImportRequest): Promise<ImportRes
         } else if (entity === 'journey_event') {
           const stage = stageIndexByName(ctx.industry, str(r.stage)!);
           if (stage === null) throw new Error(`"${r.stage}" is not a ${ctx.industry} stage`);
-          const partnerId = await lookup(sql, 'partners', ctx.tenantId, str(r.partner_code));
-          const campaignId = await lookup(sql, 'campaigns', ctx.tenantId, str(r.campaign_code));
+          const partnerId = await lookup('partners', ctx.tenantId, str(r.partner_code));
+          const campaignId = await lookup('campaigns', ctx.tenantId, str(r.campaign_code));
           if (r.partner_code && !partnerId) throw new Error(`unknown partner code "${r.partner_code}"; import partners first`);
           // a later or further event moves the journey on; activity time is always the latest event
           await sql.query(
@@ -77,7 +83,7 @@ export async function importCsv(ctx: Ctx, req: ImportRequest): Promise<ImportRes
             [ctx.tenantId, str(r.journey_ref), str(r.person_ref), await h('phone', normalizePhone(str(r.phone))), campaignId, partnerId, stage,
              str(r.occurred_at), r.crm_converted === true, r.value_inr ?? null]);
         } else if (entity === 'transaction') {
-          const partnerId = await lookup(sql, 'partners', ctx.tenantId, str(r.partner_code));
+          const partnerId = await lookup('partners', ctx.tenantId, str(r.partner_code));
           const journey = r.journey_ref ? (await sql.query<{ id: string }>(`select id from vt.journeys where tenant_id = $1 and external_ref = $2`, [ctx.tenantId, str(r.journey_ref)]))[0] : undefined;
           await sql.query(
             `insert into vt.transactions (tenant_id, external_ref, journey_ref, journey_id, person_ref, person_phone_hash, partner_id, occurred_at, value_inr, evidence)
@@ -100,7 +106,7 @@ export async function importCsv(ctx: Ctx, req: ImportRequest): Promise<ImportRes
   });
 }
 
-async function lookup(sql: Sql, table: 'partners' | 'campaigns', tenantId: string, code: string | null): Promise<string | null> {
+async function lookupRow(sql: Sql, table: 'partners' | 'campaigns', tenantId: string, code: string | null): Promise<string | null> {
   if (!code) return null;
   const rows = await sql.query<{ id: string }>(`select id from vt.${table} where tenant_id = $1 and external_code = $2`, [tenantId, code]);
   return rows[0]?.id ?? null;

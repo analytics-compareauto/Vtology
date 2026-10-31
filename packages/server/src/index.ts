@@ -5,3 +5,7 @@ export { importCsv } from './imports';
 export { runPipeline } from './pipeline';
 export { requestAction, decideAction } from './actions';
 export { listJourneys, listPartners, listViolations, listActions } from './queries';
+export { ensureSchema, schemaReady } from './schema';
+export { signIn, refreshSession, type Session, type AuthConfig } from './auth';
+export { listWorkspaces, createWorkspace, switchSampleRole } from './workspaces';
+export { generateDemo, loadDemo } from './demo';

@@ -6,7 +6,7 @@
 import { resolveIdentities, detectViolations, type JourneyRow } from '@vtology/core';
 import { requireRole, type Ctx } from './context';
 
-export interface PipelineStats { records: number; parties: number; newParties: number; heldForReview: number; reviewItems: number; journeysLinked: number; findings: number }
+export interface PipelineStats { records: number; parties: number; newParties: number; heldForReview: number; reviewItems: number; journeysLinked: number; journeysWithCustomer: number; journeys: number; findings: number }
 
 export async function runPipeline(ctx: Ctx): Promise<{ runId: string; stats: PipelineStats }> {
   requireRole(ctx, ['data_steward', 'marketing_head', 'sales_ops'], 'Running the pipeline');
@@ -61,7 +61,7 @@ export async function runPipeline(ctx: Ctx): Promise<{ runId: string; stats: Pip
     await sql.query(linkSql('transactions'), [ctx.tenantId]);
     await sql.query(linkSql('consents'), [ctx.tenantId]);
     await sql.query(`update vt.transactions t set journey_id = j.id from vt.journeys j where t.tenant_id = $1 and t.journey_id is null and j.tenant_id = t.tenant_id and j.external_ref = t.journey_ref`, [ctx.tenantId]);
-    const after = await sql.query<{ n: number }>(`select count(*)::int as n from vt.journeys where tenant_id = $1 and party_id is not null`, [ctx.tenantId]);
+    const after = await sql.query<{ n: number; total: number }>(`select count(*) filter (where party_id is not null)::int as n, count(*)::int as total from vt.journeys where tenant_id = $1`, [ctx.tenantId]);
 
     // ---- 3. detectors
     const journeys = (await sql.query<{ id: string; external_ref: string; party_id: string | null; campaign_id: string | null; current_partner_id: string | null; stage_index: number; stage_entered_at: string; last_activity_at: string; crm_converted: boolean }>(
@@ -83,7 +83,7 @@ export async function runPipeline(ctx: Ctx): Promise<{ runId: string; stats: Pip
     const stats: PipelineStats = {
       records: recs.length, parties: res.clusters.size, newParties,
       heldForReview: res.assignments.filter(a => a.method === 'held_for_review').length,
-      reviewItems: res.review.length, journeysLinked: after[0]!.n - before[0]!.n, findings: findings.length,
+      reviewItems: res.review.length, journeysLinked: after[0]!.n - before[0]!.n, journeysWithCustomer: after[0]!.n, journeys: after[0]!.total, findings: findings.length,
     };
     await sql.query(`update vt.pipeline_runs set finished_at = now(), stats = $2 where id = $1`, [runId, JSON.stringify(stats)]);
     return { runId, stats };

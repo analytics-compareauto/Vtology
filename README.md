@@ -3,7 +3,7 @@
 The operational ontology for the acquisition-to-sales pipeline: Automotive OEMs, BFSI and FMCG.
 Vtology takes exports from disconnected systems and works out who each person is. It follows every inquiry through its stages and flags the data that doesn't add up. Every fix goes through a governed action that is approved, logged and written back to the source system.
 
-This is **v0.1, the core backend**. It runs for all three industries.
+This is **v0.2**: the core engine for all three industries, plus the web app (sign-in, role-aware dashboards, governed actions, CSV import, and one-click sample workspaces).
 
 ## What's in it
 
@@ -20,11 +20,24 @@ This is **v0.1, the core backend**. It runs for all three industries.
 
 Source records are never changed. Human corrections live in `vt.edits` and are merged into `vt.journeys_current`.
 
+## v0.2: the web app
+
+- **Sign in** with Supabase Auth email + password. The browser only talks to `/api`; the server forwards to Supabase with the publishable key.
+- **Workspaces**: the first person in a fresh installation creates a workspace; after that only data stewards and marketing heads can.
+- **Sample workspaces** load about 230 fictional customers per industry through the real import and matching, with deliberate data problems. In a sample workspace, “Viewing as” switches your own role so you can see each role's view (enforced by row-level security, not just hidden in the UI).
+- **Screens**: Overview (pipeline: moving above the line, idle below), Journeys, Findings, Partners, Approvals, Data (matching runs and CSV import with automatic column matching).
+- **Self-updating database**: new migrations are applied automatically on the first request after a deploy (`vt_meta.schema_migrations`). After adding a migration file, run `npm run migrations:embed`.
+- **Runs in Mumbai** (`bom1`) next to the database.
+
+Environment variables in Vercel: `DATABASE_URL` (or `DATABASE_PASSWORD`), `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`.
+
+Local demo without Supabase: `npm run build -w @vtology/web && VT_LOCAL_DEMO=1 npm run start -w @vtology/web`, then sign in with any email and the password `demo` (in-memory database, reset on restart).
+
 ## Run the tests
 
 ```bash
 npm install
-npm test          # 19 tests, on an in-memory Postgres 17 (PGlite) with a Supabase shim
+npm test          # 32 tests, on an in-memory Postgres 17 (PGlite) with a Supabase shim
 npm run typecheck
 ```
 

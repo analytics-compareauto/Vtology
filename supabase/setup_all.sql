@@ -1,4 +1,5 @@
 -- Vtology: full database setup. Paste all of this into Supabase → SQL Editor → New query → Run.
+-- (Deployed versions of Vtology also apply new migrations automatically on start.)
 
 -- ===== 20261031000001_core.sql =====
 -- Vtology v0.1 — core ontology schema.
@@ -498,3 +499,14 @@ create policy journeys_read on vt.journeys for select to authenticated
     when 'relationship_manager' then exists (select 1 from vt.parties p where p.id = journeys.party_id and p.book_code = vt.member_book(tenant_id))
     when 'finance' then false
     else true end);
+
+-- ===== 20261031000005_workspaces.sql =====
+-- v0.2: workspaces created from the app, and sample (demo) workspaces where a member may switch
+-- their own role to see each role's view. Demo workspaces hold generated data only.
+alter table vt.tenants add column if not exists is_demo boolean not null default false;
+alter table vt.tenants add column if not exists created_by uuid;
+alter table vt.tenants add column if not exists created_at timestamptz not null default now();
+
+create schema if not exists vt_meta;
+create table if not exists vt_meta.schema_migrations (id text primary key, applied_at timestamptz not null default now());
+insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces') on conflict do nothing;

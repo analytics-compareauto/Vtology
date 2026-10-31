@@ -1,7 +1,14 @@
-import { handle, createPostgresDb, type Db } from '@vtology/server';
+import { handle, createPostgresDb, schemaReady, type Db } from '@vtology/server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
+// Run next to the Mumbai database: dozens of queries per request need to be a millisecond away, not 200.
+export const preferredRegion = 'bom1';
+
+/** Local demo mode (never on Vercel): in-memory database and password "demo" sign-in. */
+const LOCAL = process.env.VT_LOCAL_DEMO === '1' && !process.env.VERCEL;
+const LOCAL_SECRET = 'vtology-local-demo-secret-not-for-production';
 
 /** Accept the connection string the way people actually paste it: stray quotes or spaces,
  *  a leading "DATABASE_URL=", the [brackets] from Supabase's template, or a password with
@@ -62,6 +69,10 @@ function databaseUrl(): string | undefined {
 
 let dbPromise: Promise<Db> | null = null;
 function db(): Promise<Db> {
+  if (LOCAL) {
+    dbPromise ??= import('@vtology/server/src/devdb').then(m => m.createPgliteDb()).then(r => r.db);
+    return dbPromise;
+  }
   const url = databaseUrl();
   if (!url) throw new Error('Set DATABASE_PASSWORD (and SUPABASE_URL) in Vercel.');
   dbPromise ??= createPostgresDb(url);
@@ -71,17 +82,22 @@ function db(): Promise<Db> {
 async function route(req: Request): Promise<Response> {
   const supabaseUrl = process.env.SUPABASE_URL;
   const jwtSecret = process.env.SUPABASE_JWT_SECRET;
-  if (new URL(req.url).pathname === '/api/health') return health(!!(supabaseUrl || jwtSecret));
+  const supabaseKey = process.env.SUPABASE_PUBLISHABLE_KEY?.trim() || process.env.SUPABASE_ANON_KEY?.trim();
+  if (new URL(req.url).pathname === '/api/health') return health(LOCAL || !!(supabaseUrl || jwtSecret), !!supabaseKey);
+  if (LOCAL) return handle(req, { db: await db(), localSecret: LOCAL_SECRET });
   if (!supabaseUrl && !jwtSecret) return Response.json({ error: 'Set SUPABASE_URL (and optionally SUPABASE_JWT_SECRET) on the server.' }, { status: 500 });
-  return handle(req, { db: await db(), supabaseUrl, jwtSecret });
+  return handle(req, { db: await db(), supabaseUrl, supabaseKey, jwtSecret });
 }
 
 /** Health check that really talks to the database, so a wrong password or setup shows up here. */
-async function health(auth: boolean): Promise<Response> {
+async function health(auth: boolean, signIn: boolean): Promise<Response> {
   let database = 'not configured';
   let stages: number | undefined;
-  if (databaseUrl()) {
+  let schema: string | undefined;
+  if (LOCAL || databaseUrl()) {
     try {
+      await schemaReady(await db());
+      schema = 'up to date';
       const rows = await Promise.race([
         (await db()).admin.query<{ n: number }>('select count(*)::int as n from vt.stage_defs'),
         new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timed out after 8s')), 8000)),
@@ -97,9 +113,9 @@ async function health(auth: boolean): Promise<Response> {
     }
   }
   const ok = database === 'connected' && auth;
-  const url = databaseUrl();
+  const url = LOCAL ? undefined : databaseUrl();
   const databaseUrlCheck = url && !ok ? describeDatabaseUrl(url) : undefined;
-  return Response.json({ ok, service: 'vtology', database, databaseUrl: databaseUrlCheck, passwordSetSeparately: !!process.env.DATABASE_PASSWORD, stages, auth: auth ? 'configured' : 'SUPABASE_URL missing' }, { status: ok ? 200 : 503 });
+  return Response.json({ ok, service: 'vtology', version: '0.2.0', database, schema, databaseUrl: databaseUrlCheck, stages, auth: auth ? 'configured' : 'SUPABASE_URL missing', signIn: LOCAL ? 'local demo mode' : signIn ? 'configured' : 'add SUPABASE_PUBLISHABLE_KEY' }, { status: ok ? 200 : 503 });
 }
 
 export const GET = route;

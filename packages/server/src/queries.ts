@@ -61,5 +61,8 @@ export async function listActions(ctx: Ctx) {
 }
 
 export async function me(ctx: Ctx) {
-  return { userId: ctx.userId, tenantId: ctx.tenantId, industry: ctx.industry, role: ctx.role, partnerId: ctx.partnerId, bookCode: ctx.bookCode };
+  const partner = ctx.partnerId ? (await ctx.db.admin.query<{ name: string }>(`select name from vt.partners where id = $1`, [ctx.partnerId]))[0]?.name ?? null : null;
+  const [run] = await ctx.db.admin.query<{ finished_at: string; stats: unknown }>(`select finished_at, stats from vt.pipeline_runs where tenant_id = $1 and finished_at is not null order by started_at desc limit 1`, [ctx.tenantId]);
+  return { userId: ctx.userId, tenantId: ctx.tenantId, tenantName: ctx.tenantName, isDemo: ctx.isDemo, industry: ctx.industry, role: ctx.role, partnerId: ctx.partnerId, partner, bookCode: ctx.bookCode,
+    lastRun: run ? { finishedAt: run.finished_at, stats: run.stats } : null };
 }

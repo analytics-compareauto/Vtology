@@ -8,6 +8,8 @@
  */
 export interface Sql {
   query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]>;
+  /** Run a script of several statements (no parameters), e.g. a migration. */
+  exec(text: string): Promise<void>;
 }
 
 export interface Db {
@@ -26,8 +28,10 @@ export const USER_CONTEXT_SQL = (userId: string) => [
 export async function createPostgresDb(connectionString: string): Promise<Db> {
   const { default: postgres } = await import('postgres');
   const client = postgres(connectionString, { prepare: false, max: 5 });
-  const wrap = (tx: { unsafe: (q: string, p?: unknown[]) => Promise<unknown> }): Sql => ({
+  type Unsafe = { unsafe: (q: string, p?: unknown[]) => Promise<unknown> & { simple: () => Promise<unknown> } };
+  const wrap = (tx: Unsafe): Sql => ({
     query: async <T,>(text: string, params: unknown[] = []) => (await tx.unsafe(text, params as never[])) as unknown as T[],
+    exec: async text => { await tx.unsafe(text).simple(); },
   });
   return {
     admin: wrap(client as never),
