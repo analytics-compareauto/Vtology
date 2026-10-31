@@ -8,6 +8,11 @@ export const dynamic = 'force-dynamic';
  *  symbols that are not percent-encoded. */
 function cleanDatabaseUrl(raw: string): string {
   let s = raw.trim().replace(/^DATABASE_URL\s*=\s*/i, '').trim().replace(/^['"]|['"]$/g, '').trim();
+  // Text pasted around the address (a psql command, a label, quotes): keep only the address.
+  const at = s.search(/postgres(?:ql)?:\/\//);
+  if (at > 0) s = s.slice(at).replace(/['"\s].*$/s, '');
+  // The postgresql:// part cut off when copying: put it back.
+  else if (at < 0 && /^[^\s:/@]+:.+@[^@\s]+:\d+/.test(s)) s = `postgresql://${s}`;
   const m = /^(postgres(?:ql)?:\/\/)([^:/@]+):(.*)@([^@/]+)(\/.*)?$/s.exec(s);
   if (!m) return s;
   const [, scheme, user, pass0, host, rest] = m;
@@ -22,7 +27,11 @@ function cleanDatabaseUrl(raw: string): string {
 function describeDatabaseUrl(raw: string): string {
   const s = cleanDatabaseUrl(raw);
   const issues: string[] = [];
-  if (!/^postgres(ql)?:\/\//.test(s)) issues.push('should start with postgresql://');
+  if (!/^postgres(ql)?:\/\//.test(s)) {
+    // Show only what comes before the first ":" (never the password).
+    const head = s.split(':')[0]!.slice(0, 24);
+    issues.push(`should start with postgresql:// (yours starts with "${head}")`);
+  }
   if (!/pooler\.supabase\.com/.test(s)) issues.push('should use the pooler address (…pooler.supabase.com)');
   if (!/:6543\//.test(s)) issues.push('should use port 6543 (Transaction pooler)');
   if (/YOUR-PASSWORD/i.test(s)) issues.push('still contains YOUR-PASSWORD: put your database password in its place');
