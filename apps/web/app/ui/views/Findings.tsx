@@ -29,6 +29,12 @@ export function Findings({ data, act }: { data: WorkspaceData; act: (d: ActionDr
 
   return (
     <section style={{ display: 'grid', gap: 18 }}>
+      <div className="kpis">
+        <div className="kpi"><span className="label">Findings</span><span className="value">{findings.length}</span><span className="sub">across {rules.length} kinds of problem</span></div>
+        <div className="kpi leak"><span className="label">High severity</span><span className="value">{findings.filter(f => f.severity === 'high').length}</span><span className="sub">handle these first</span></div>
+        <div className={`kpi${seesMoney ? ' leak' : ''}`}><span className="label">Money involved</span><span className="value">{seesMoney ? inr(findings.reduce((s, f) => s + Number(f.value_inr ?? 0), 0)) : 'Hidden'}</span><span className="sub">{seesMoney ? 'payouts, sales and spend in question' : 'money isn’t shown to your role'}</span></div>
+        <div className="kpi"><span className="label">Biggest group</span><span className="value" style={{ fontSize: 20, lineHeight: 1.25, paddingTop: 6 }}>{RULES[[...rules].sort((a, b) => findings.filter(f => f.rule === b).length - findings.filter(f => f.rule === a).length)[0]!]?.title}</span></div>
+      </div>
       <p className="muted small">From the matching run {me.lastRun ? ago(me.lastRun.finishedAt) : ''}. Each finding is checked again before any action changes data.</p>
       {rules.map(rule => {
         const items = findings.filter(f => f.rule === rule);

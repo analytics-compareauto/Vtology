@@ -29,6 +29,12 @@ export function Journeys({ data, act }: { data: WorkspaceData; act: (d: ActionDr
 
   return (
     <section style={{ display: 'grid', gap: 14 }}>
+      <div className="kpis" style={{ marginBottom: 6 }}>
+        <div className="kpi"><span className="label">All journeys</span><span className="value">{counts.all}</span><span className="sub">in your view</span></div>
+        <div className="kpi leak"><span className="label">Idle past limit</span><span className="value">{counts.idle}</span><span className="sub">{Math.round((counts.idle / counts.all) * 100)}% going cold</span></div>
+        <div className="kpi"><span className="label">Moving</span><span className="value">{counts.moving}</span><span className="sub">within their stage limit</span></div>
+        <div className="kpi ok"><span className="label">Converted</span><span className="value">{counts.converted}</span><span className="sub">{Math.round((counts.converted / counts.all) * 100)}% of journeys</span></div>
+      </div>
       <div className="toolbar">
         <div className="seg" role="group" aria-label="Show">
           {(['idle', 'moving', 'converted', 'all'] as Filter[]).map(f => (

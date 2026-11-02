@@ -9,7 +9,13 @@ export function Partners({ data, act }: { data: WorkspaceData; act: (d: ActionDr
   if (partners.length === 0) return <div className="empty">No partners in your view.</div>;
   const direct = canDecide('escalate_partner', me.role);
   return (
-    <section style={{ display: 'grid', gap: 12 }}>
+    <section style={{ display: 'grid', gap: 14 }}>
+      <div className="kpis" style={{ marginBottom: 6 }}>
+        <div className="kpi"><span className="label">Partners</span><span className="value">{partners.length}</span><span className="sub">handling {partners.reduce((s, p) => s + p.journeys, 0)} journeys</span></div>
+        <div className="kpi leak"><span className="label">Above the 38% limit</span><span className="value">{partners.filter(p => p.stalledShare > 0.38 && p.journeys >= 10).length}</span><span className="sub">can be escalated</span></div>
+        <div className="kpi"><span className="label">Idle share overall</span><span className="value">{pct(partners.reduce((s, p) => s + p.stalled, 0) / Math.max(1, partners.reduce((s, p) => s + p.journeys, 0)))}</span><span className="sub">of journeys past their limit</span></div>
+        <div className="kpi"><span className="label">Slowest partner</span><span className="value" style={{ fontSize: 20, lineHeight: 1.25, paddingTop: 6 }}>{[...partners].sort((a, b) => b.stalledShare - a.stalledShare)[0]!.name}</span><span className="sub">{pct([...partners].sort((a, b) => b.stalledShare - a.stalledShare)[0]!.stalledShare)} idle</span></div>
+      </div>
       <p className="muted small" style={{ maxWidth: '72ch' }}>Share of each partner’s journeys sitting past the stage time limit. The black mark is the 38% line: above it, with at least 10 journeys, a partner is flagged and can be escalated.</p>
       <div className="table-wrap">
         <table>
