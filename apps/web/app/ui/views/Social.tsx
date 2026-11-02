@@ -3,33 +3,61 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Dimension, Insight, ScoredPost, Segment } from '@vtology/core';
 import type { WorkspaceData } from '../Dashboard';
 import { api, ApiError } from '../api';
-import { ago, inr, num, pct } from '../format';
+import { ago, change, compact, inr, num, pct } from '../format';
+import { EffortMap, LineChart, Sparkline } from '../charts';
+import { IconDown, IconImage, IconPlay, IconRefresh, IconSpark, IconText, IconUp } from '../icons';
 
 interface Connection { id: string; provider: string; label: string; status: string; scopes: string[]; connected_at: string; last_sync_at: string | null; last_error: string | null }
 interface Account { id: string; platform: string; name: string; handle: string | null; followers: number | null; posts_count: number | null; profile_url: string | null }
 interface Campaign { code: string; name: string; channel: string; spend: number | null; platform_conversions: number; journeys: number; progressed: number; converted: number }
+type Post = ScoredPost & { postedAt: string; thumbnailUrl?: string | null };
 interface Overview {
   canConnect: boolean;
   providers: { meta: boolean; youtube: boolean; linkedin: boolean; secret: boolean };
   connections: Connection[]; accounts: Account[]; campaigns: Campaign[];
-  analysis: { windowDays: number; posts: number; lowAudience?: number; byPlatform: { platform: string; posts: number; views: number; interactions: number; medianEngagement: number | null }[]; segments: Segment[]; insights: Insight[]; top: (ScoredPost & { postedAt: string })[]; bottom: (ScoredPost & { postedAt: string })[] };
+  analysis: {
+    windowDays: number; posts: number; lowAudience?: number;
+    weekly?: { week: string; platform: string; posts: number; interactions: number; audience: number }[];
+    byPlatform: { platform: string; posts: number; views: number; interactions: number; medianEngagement: number | null }[];
+    segments: Segment[]; insights: Insight[]; top: Post[]; bottom: Post[];
+  };
 }
 
 const PLATFORM: Record<string, string> = { instagram: 'Instagram', facebook: 'Facebook', youtube: 'YouTube', linkedin: 'LinkedIn' };
+const SHORT: Record<string, string> = { instagram: 'IG', facebook: 'FB', youtube: 'YT', linkedin: 'IN' };
+const COLOR: Record<string, string> = { instagram: 'var(--s-instagram)', facebook: 'var(--s-facebook)', youtube: 'var(--s-youtube)', linkedin: 'var(--s-linkedin)' };
+const ORDER = ['instagram', 'facebook', 'youtube', 'linkedin'];
 const PROVIDERS = [
-  { id: 'meta', name: 'Instagram and Facebook', covers: 'Posts, reach, saves, shares, ad campaigns and lead-form leads' },
-  { id: 'youtube', name: 'YouTube', covers: 'Videos and shorts, views, watch time, how much of each video people watch' },
-  { id: 'linkedin', name: 'LinkedIn', covers: 'Company page posts and followers' },
+  { id: 'meta', name: 'Instagram and Facebook', platforms: ['instagram', 'facebook'], covers: 'Posts, reach, saves, shares, ad campaigns and lead-form leads' },
+  { id: 'youtube', name: 'YouTube', platforms: ['youtube'], covers: 'Videos and shorts, views, watch time, how much of each video people watch' },
+  { id: 'linkedin', name: 'LinkedIn', platforms: ['linkedin'], covers: 'Company page posts and followers' },
 ];
-const DIMS: { id: Dimension; label: string }[] = [
-  { id: 'theme', label: 'Theme' }, { id: 'format', label: 'Format' }, { id: 'time', label: 'Time of day' }, { id: 'day', label: 'Day' }, { id: 'language', label: 'Language' }, { id: 'length', label: 'Caption length' },
+const DIMS: { id: Dimension; label: string; noun: string }[] = [
+  { id: 'theme', label: 'Theme', noun: 'themes' }, { id: 'format', label: 'Format', noun: 'formats' }, { id: 'time', label: 'Time of day', noun: 'times of day' },
+  { id: 'day', label: 'Day', noun: 'days' }, { id: 'language', label: 'Language', noun: 'languages' }, { id: 'length', label: 'Caption length', noun: 'caption lengths' },
 ];
+const METRICS = [
+  { id: 'interactions', label: 'Interactions', noun: 'interactions' },
+  { id: 'audience', label: 'Views and reach', noun: 'views and reach' },
+  { id: 'posts', label: 'Posts', noun: 'posts' },
+] as const;
+type Metric = typeof METRICS[number]['id'];
+
+function mondayOf(d: Date) {
+  const ist = new Date(d.getTime() + 330 * 60_000);
+  const dow = (ist.getUTCDay() + 6) % 7;
+  return new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate() - dow));
+}
+const weekLabel = (iso: string) => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 
 export function Social({ data, workspaceId, notify }: { data: WorkspaceData; workspaceId: string; notify: (m: string) => void }) {
   const [o, setO] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [dim, setDim] = useState<Dimension>('theme');
+  const [dim, setDim] = useState<Dimension>('format');
+  const [metric, setMetric] = useState<Metric>('interactions');
+  const [manage, setManage] = useState(false);
   const T = `/tenants/${workspaceId}`;
 
   const load = useCallback(() => api<Overview>('GET', `${T}/social`).then(r => { setO(r); setError(null); return r; }).catch(e => { setError(e instanceof ApiError ? e.message : 'Could not load social data.'); return null; }), [T]);
@@ -68,122 +96,253 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
     finally { setBusy(null); }
   }
 
-  const segs = useMemo(() => (o?.analysis.segments ?? []).filter(s => s.dimension === dim).sort((a, b) => b.lift - a.lift), [o, dim]);
-  if (error) return <div className="error-box" role="alert">{error}</div>;
-  if (!o) return <div className="progress" />;
+  // ---- derived numbers
+  const derived = useMemo(() => {
+    if (!o) return null;
+    const a = o.analysis;
+    const weekly = a.weekly ?? [];
+    const platforms = ORDER.filter(p => a.byPlatform.some(b => b.platform === p && b.posts > 0));
+    // the last 26 complete-or-current weeks, gaps filled with zero
+    const end = mondayOf(new Date());
+    const weeks = Array.from({ length: 26 }, (_, i) => new Date(end.getTime() - (25 - i) * 7 * 86_400_000).toISOString().slice(0, 10));
+    const val = (p: string, w: string, m: Metric) => { const r = weekly.find(x => x.platform === p && x.week === w); return r ? r[m] : 0; };
+    const series = (m: Metric) => platforms.map(p => ({ key: p, label: PLATFORM[p]!, color: COLOR[p]!, values: weeks.map(w => val(p, w, m)) }));
+    const last4 = (vals: number[]) => sum(vals.slice(-4)), prev4 = (vals: number[]) => sum(vals.slice(-8, -4));
+    return { a, platforms, weeks, series, last4, prev4 };
+  }, [o]);
 
-  const a = o.analysis;
-  const byKind = (k: Insight['kind']) => a.insights.filter(i => i.kind === k).slice(0, 5);
+  const segs = useMemo(() => (o?.analysis.segments ?? []).filter(s => s.dimension === dim && !(s.dimension === 'theme' && s.key === 'other')).sort((x, y) => y.lift - x.lift), [o, dim]);
+
+  if (error) return <div className="error-box" role="alert">{error}</div>;
+  if (!o || !derived) return <div className="progress" />;
+
+  const { a, platforms, weeks, series, last4, prev4 } = derived;
   const real = o.connections.filter(c => c.provider !== 'sample');
   const sample = o.connections.find(c => c.provider === 'sample');
-  const maxLift = Math.max(2, ...segs.map(s => s.lift));
+  const lastSync = real.map(c => c.last_sync_at).filter(Boolean).sort().pop();
   const seesMoney = o.campaigns.some(c => c.spend !== null);
   const paid = o.campaigns.filter(c => /meta|google|youtube|search|programmatic/i.test(c.channel) || c.code.startsWith('meta:'));
+  const trend = series(metric);
+  const totalNow = sum(trend.map(s => last4(s.values))), totalBefore = sum(trend.map(s => prev4(s.values)));
+  const mover = [...trend].sort((x, y) => (last4(y.values) - prev4(y.values)) - (last4(x.values) - prev4(x.values)))[0];
+  const metricNoun = METRICS.find(m => m.id === metric)!.noun;
+  const followers = sum(o.accounts.map(x => x.followers ?? 0));
+  const interactionsAll = sum(a.byPlatform.map(b => b.interactions));
+  const reachAll = sum(a.byPlatform.map(b => b.views));
+  const iNow = sum(series('interactions').map(s => last4(s.values))), iBefore = sum(series('interactions').map(s => prev4(s.values)));
+
+  const best = segs.find(s => s.lift >= 1.15), worst = [...segs].reverse().find(s => s.lift <= 0.85);
+  const cut = segs.filter(s => s.lift <= 0.85).sort((x, y) => y.share - x.share)[0];
+  const more = segs.filter(s => s.lift >= 1.15 && s.share < 0.3).sort((x, y) => y.lift - x.lift)[0];
+  const dimNoun = DIMS.find(d => d.id === dim)!.noun;
+
+  const reported = sum(paid.map(c => c.platform_conversions)), arrived = sum(paid.map(c => c.journeys)), moved = sum(paid.map(c => c.progressed)), won = sum(paid.map(c => c.converted));
 
   return (
     <>
-      <section style={{ display: 'grid', gap: 12 }}>
-        <div className="section-title">
-          <h2>Connected accounts</h2>
-          {real.length > 0 && <button className="btn" onClick={sync} disabled={busy === 'sync'}>{busy === 'sync' ? 'Syncing…' : 'Sync now'}</button>}
+      {/* connections */}
+      <section className="panel" style={{ padding: '14px 18px' }}>
+        <div className="toolbar" style={{ justifyContent: 'space-between' }}>
+          <div className="conn-strip">
+            {PROVIDERS.map(p => {
+              const c = p.id === 'linkedin' ? undefined : real.find(x => x.provider === p.id);
+              const warn = c?.last_error;
+              return (
+                <button key={p.id} className="conn" onClick={() => setManage(m => !m)} aria-expanded={manage}>
+                  {p.platforms.map(pl => <span key={pl} className={`pf ${pl}`} style={{ width: 22, height: 22, fontSize: 9.5, borderRadius: 6 }}>{SHORT[pl]}</span>)}
+                  {p.name}
+                  <span className={`dot ${c ? (warn ? 'warn' : 'ok') : 'off'}`} />
+                  <span className="muted small" style={{ fontWeight: 500 }}>{c ? (warn ? 'Partly connected' : 'Connected') : p.id === 'linkedin' ? 'Awaiting LinkedIn approval' : data.me.isDemo ? 'Sample' : 'Not connected'}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="toolbar">
+            {lastSync && <span className="muted small">Updated {ago(lastSync)}</span>}
+            {real.length > 0 && <button className="btn" onClick={sync} disabled={busy === 'sync'}><IconRefresh />{busy === 'sync' ? 'Syncing…' : 'Sync now'}</button>}
+          </div>
         </div>
-        {busy === 'sync' && <div><div className="progress" /><p className="muted small" style={{ marginTop: 6 }}>Fetching posts, insights, ad campaigns and leads from the connected accounts…</p></div>}
-        {sample && <div className="note-box small">This sample workspace shows fictional accounts for {data.me.tenantName}. Connect real accounts in a workspace for your own brand.</div>}
-        {!data.me.isDemo && <div className="rows">
-          {PROVIDERS.map(p => {
-            const c = real.find(x => x.provider === p.id);
-            const ready = p.id === 'linkedin' ? false : o.providers[p.id as 'meta' | 'youtube'] && o.providers.secret;
-            return (
-              <div className="row" key={p.id}>
-                <div className="row-main">
-                  <span><b>{p.name}</b>{c && <span className={`tag ${c.status === 'active' ? 'ok' : 'leak'}`} style={{ marginLeft: 8 }}>{c.status === 'active' ? 'Connected' : c.status === 'expired' ? 'Needs reconnecting' : 'Problem'}</span>}</span>
-                  <span className="toolbar">
-                    {c && o.canConnect && <button className="btn small" onClick={() => disconnect(c)} disabled={busy === c.id}>Disconnect</button>}
-                    {o.canConnect && p.id !== 'linkedin' && <button className={`btn small${c ? '' : ' primary'}`} onClick={() => connect(p.id)} disabled={!ready || busy === p.id}>{c ? 'Reconnect' : 'Connect'}</button>}
-                  </span>
+        {busy === 'sync' && <div style={{ marginTop: 12 }}><div className="progress" /><p className="muted small" style={{ marginTop: 6 }}>Fetching posts, insights, ad campaigns and leads. This takes up to a minute.</p></div>}
+        {sample && <p className="muted small" style={{ marginTop: 10 }}>These are fictional accounts for {data.me.tenantName}. Connect real accounts in a workspace for your own brand.</p>}
+        {manage && !data.me.isDemo && (
+          <div className="conn-detail" style={{ marginTop: 10, borderTop: '1px solid var(--line-soft)' }}>
+            {PROVIDERS.map(p => {
+              const c = real.find(x => x.provider === p.id);
+              const ready = p.id === 'linkedin' ? false : o.providers[p.id as 'meta' | 'youtube'] && o.providers.secret;
+              return (
+                <div className="row" key={p.id}>
+                  <div className="row-main">
+                    <span><b>{p.name}</b> <span className="muted small">{c ? `${c.label}, connected ${ago(c.connected_at)}` : p.covers}</span></span>
+                    <span className="toolbar">
+                      {c && o.canConnect && <button className="btn small" onClick={() => disconnect(c)} disabled={busy === c.id}>Disconnect</button>}
+                      {o.canConnect && p.id !== 'linkedin' && <button className={`btn small${c ? '' : ' primary'}`} onClick={() => connect(p.id)} disabled={!ready || busy === p.id}>{c ? 'Reconnect' : 'Connect'}</button>}
+                    </span>
+                  </div>
+                  {p.id === 'linkedin' && <span className="muted small">Available once LinkedIn approves Vtology’s access request.</span>}
+                  {c?.last_error && <span className="warnline">{c.last_error.replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').slice(0, 260)}</span>}
                 </div>
-                <span className="muted small">
-                  {c ? `${c.label}. Last synced ${c.last_sync_at ? ago(c.last_sync_at) : 'never'}.` : p.covers + '.'}
-                  {p.id === 'linkedin' && ' Available once LinkedIn approves Vtology’s access request.'}
-                  {p.id !== 'linkedin' && !ready && o.canConnect && ' Not set up on this server yet.'}
-                </span>
-                {c?.last_error && <span className="small" style={{ color: 'var(--warn)' }}>{c.last_error}</span>}
-              </div>
-            );
-          })}
-        </div>}
-        {!data.me.isDemo && !o.canConnect && <p className="muted small">Marketing heads and data stewards can connect accounts.</p>}
+              );
+            })}
+            {!o.canConnect && <p className="muted small" style={{ paddingTop: 10 }}>Marketing heads and data stewards can connect accounts.</p>}
+          </div>
+        )}
       </section>
 
       {a.posts === 0 ? (
         <div className="empty">No posts yet. Connect an account to see what’s working.</div>
       ) : (
         <>
-          <section className="figures" aria-label="Social footprint">
-            {o.accounts.slice(0, 3).map(acc => (
-              <div className="figure" key={acc.id}><b>{acc.followers !== null ? num(acc.followers) : '—'}</b><span>{PLATFORM[acc.platform]} followers{acc.handle ? `, ${acc.handle.startsWith('@') ? acc.handle : '@' + acc.handle}` : ''}</span></div>
-            ))}
-            <div className="figure"><b>{num(a.posts)}</b><span>posts in the last {Math.round(a.windowDays / 30)} months</span></div>
+          {/* headline numbers */}
+          <section className="kpis" aria-label="Headline numbers">
+            <div className="kpi"><span className="label">Audience</span><span className="value">{compact(followers)}</span><span className="sub">followers across {o.accounts.length} accounts</span></div>
+            <div className="kpi"><span className="label">Posts</span><span className="value">{num(a.posts)}</span><span className="sub">in the last {Math.round(a.windowDays / 30)} months, {(a.posts / (a.windowDays / 7)).toFixed(1)} a week</span></div>
+            <div className="kpi"><span className="label">Views and reach</span><span className="value">{compact(reachAll)}</span><span className="sub">{reachAll && a.posts ? `${compact(reachAll / a.posts)} per post on average` : 'not reported yet'}</span></div>
+            <div className="kpi"><span className="label">Interactions, last 4 weeks</span><span className="value">{compact(iNow)}</span>
+              <span className="sub" style={{ color: iNow >= iBefore ? 'var(--ok)' : 'var(--leak)', fontWeight: 650 }}>{change(iNow, iBefore)} <span className="muted" style={{ fontWeight: 400 }}>vs the 4 weeks before ({compact(iBefore)})</span></span></div>
           </section>
 
-          <section className="split3">
-            <InsightList title="What’s working" items={byKind('working')} tone="ok" />
-            <InsightList title="What’s not" items={byKind('not_working')} tone="leak" />
-            <InsightList title="Try next" items={byKind('try')} tone="flow" />
+          {/* per platform */}
+          <section className="pf-tiles">
+            {platforms.map(p => {
+              const b = a.byPlatform.find(x => x.platform === p)!;
+              const acc = o.accounts.find(x => x.platform === p);
+              const vals = series('interactions').find(s => s.key === p)!.values;
+              const n = last4(vals), before = prev4(vals);
+              return (
+                <div className="pf-tile" key={p} style={{ ['--pf' as string]: COLOR[p] }}>
+                  <div className="head">
+                    <span className={`pf lg ${p}`}>{SHORT[p]}</span>
+                    <div style={{ minWidth: 0 }}><b>{PLATFORM[p]}</b><span>{acc?.handle ? (acc.handle.startsWith('@') ? acc.handle : '@' + acc.handle) : acc?.name}</span></div>
+                  </div>
+                  <div className="big">{acc?.followers != null ? compact(acc.followers) : '—'}<small>followers</small></div>
+                  <div>
+                    <div className="small" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <span className="muted">Weekly interactions</span>
+                      <b style={{ color: n >= before ? 'var(--ok)' : 'var(--leak)' }}>{change(n, before)}</b>
+                    </div>
+                    <Sparkline values={vals} color={COLOR[p]!} />
+                  </div>
+                  <div className="pf-stats">
+                    <div><b>{num(b.posts)}</b><span>posts</span></div>
+                    <div><b>{compact(b.views)}</b><span>views, reach</span></div>
+                    <div><b>{b.medianEngagement != null ? `${(b.medianEngagement * 100).toFixed(1)}%` : '—'}</b><span>engagement</span></div>
+                  </div>
+                </div>
+              );
+            })}
           </section>
 
-          <section style={{ display: 'grid', gap: 12 }}>
-            <div className="section-title">
-              <h2>Compared with your usual post</h2>
+          {/* trend */}
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>{totalBefore === 0 && totalNow === 0 ? `Weekly ${metricNoun}` : `${metricNoun[0]!.toUpperCase() + metricNoun.slice(1)} ${totalNow >= totalBefore ? 'up' : 'down'} ${change(totalNow, totalBefore).replace(/^[+−]/, '')} in the last 4 weeks`}</h2>
+                <p>{compact(totalNow)} {metricNoun} in the last 4 weeks against {compact(totalBefore)} in the 4 before.{mover && last4(mover.values) !== prev4(mover.values) ? ` ${mover.label} moved most: ${compact(prev4(mover.values))} to ${compact(last4(mover.values))}.` : ''}</p>
+              </div>
+              <div className="seg" role="group" aria-label="Measure">
+                {METRICS.map(m => <button key={m.id} aria-pressed={metric === m.id} onClick={() => setMetric(m.id)}>{m.label}</button>)}
+              </div>
+            </div>
+            <div className="legend" style={{ marginBottom: 8 }}>{trend.map(s => <span key={s.key}><i className="line" style={{ background: s.color }} />{s.label}</span>)}</div>
+            <LineChart x={weeks} series={trend} xFormat={weekLabel} />
+          </section>
+
+          {/* what to do: verdicts */}
+          <section className="verdicts">
+            <Verdict title="What’s working" tone="ok" icon={<IconUp />} items={a.insights.filter(i => i.kind === 'working').slice(0, 4)} segments={a.segments} />
+            <Verdict title="What’s not" tone="leak" icon={<IconDown />} items={a.insights.filter(i => i.kind === 'not_working').slice(0, 4)} segments={a.segments} />
+            <Verdict title="Try next" tone="flow" icon={<IconSpark />} items={a.insights.filter(i => i.kind === 'try').slice(0, 4)} segments={a.segments} />
+          </section>
+
+          {/* effort vs return */}
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>{cut && more ? `Shift effort from ${cut.label.toLowerCase()} to ${more.label.toLowerCase()}` : best ? `${best.label} perform best at ${best.lift.toFixed(1)}× your usual` : `Effort against return, by ${DIMS.find(d => d.id === dim)!.label.toLowerCase()}`}</h2>
+                <p>{cut ? `${cut.label} take ${pct(cut.share)} of your posts but earn ${cut.lift.toFixed(1)}× your usual engagement. ` : ''}{more ? `${more.label} earn ${more.lift.toFixed(1)}× from only ${pct(more.share)} of posts. ` : ''}{!cut && !more ? `No clear gap between ${dimNoun} yet. ` : ''}Each bubble is a group of posts; bigger means more posts.</p>
+              </div>
               <div className="seg" role="group" aria-label="Group by">
                 {DIMS.map(d => <button key={d.id} aria-pressed={dim === d.id} onClick={() => setDim(d.id)}>{d.label}</button>)}
               </div>
             </div>
-            <p className="muted small" style={{ maxWidth: '72ch' }}>1× is each account’s typical engagement. Groups with fewer than 3 posts are left out; groups under 8 posts are early signals.{a.lowAudience ? ` ${num(a.lowAudience)} posts reached fewer than 50 people (or have no reach figure and a following under 50), so they are not compared: a few likes on a handful of views would look like a huge win.` : ''}</p>
             {segs.length === 0 ? <div className="empty">Not enough posts in any group yet.</div> : (
-              <div className="lift-list">
-                {segs.map(sg => (
-                  <div className="lift-row" key={sg.key}>
-                    <span className="lift-name">{sg.label}<span className="muted small"> {sg.posts} posts</span></span>
-                    <div className="lift-track" aria-hidden="true">
-                      <span className="lift-one" style={{ left: `${(1 / maxLift) * 100}%` }} />
-                      <i className={sg.lift >= 1.3 ? 'up' : sg.lift <= 0.75 ? 'down' : ''} style={{ width: `${Math.min(100, (sg.lift / maxLift) * 100)}%` }} />
-                    </div>
-                    <b className="lift-val">{sg.lift.toFixed(1)}×</b>
+              <div className="effort-wrap">
+                <EffortMap points={segs.map(s => ({ key: s.key, label: s.label, share: s.share, lift: s.lift, posts: s.posts }))} />
+                <div>
+                  <div className="lift-axis"><span /><div><span>0.25×</span><span>1× usual</span><span>4×</span></div><span /></div>
+                  <div className="lift-list">
+                    {segs.map(sg => {
+                      const pos = Math.max(-1, Math.min(1, Math.log(sg.lift) / Math.log(4)));
+                      return (
+                        <div className="lift-row" key={sg.key}>
+                          <span className="lift-name">{sg.label}<span>{sg.posts} posts, {pct(sg.share)}{sg.posts < 8 ? ', early signal' : ''}</span></span>
+                          <div className="lift-track" aria-hidden="true">
+                            <span className="mid" />
+                            <i className={sg.lift >= 1.15 ? 'up' : sg.lift <= 0.85 ? 'down' : pos >= 0 ? 'up flat' : 'down flat'} style={{ width: `${Math.max(1, Math.abs(pos) * 50)}%` }} />
+                          </div>
+                          <b className="lift-val" style={{ color: sg.lift >= 1.15 ? 'var(--ok)' : sg.lift <= 0.85 ? 'var(--leak)' : undefined }}>{sg.lift.toFixed(1)}×</b>
+                        </div>
+                      );
+                    })}
                   </div>
-                ))}
+                  {worst && best && worst.key !== best.key && <p className="muted small" style={{ marginTop: 10 }}>{best.label} get {(best.lift / Math.max(worst.lift, 0.05)).toFixed(1)}× the engagement of {worst.label.toLowerCase()}.</p>}
+                </div>
               </div>
             )}
+            <p className="muted small" style={{ marginTop: 14, maxWidth: '90ch' }}>1× is each account’s typical engagement rate (interactions ÷ people reached), so platforms of different sizes compare fairly. Groups under 3 posts are left out.{a.lowAudience ? ` ${num(a.lowAudience)} posts reached fewer than 50 people and are not compared yet.` : ''}</p>
           </section>
 
-          <div className="split">
-            <PostList title="Best posts" posts={a.top} />
-            <PostList title="Weakest posts" posts={a.bottom} />
+          {/* posts */}
+          <div className="grid-2">
+            <section className="panel">
+              <div className="panel-head"><div><h2>Top posts</h2><p>Highest engagement against each account’s usual.</p></div></div>
+              <div className="posts">{a.top.slice(0, 4).map(p => <PostCard key={p.id} p={p} />)}</div>
+            </section>
+            <section className="panel">
+              <div className="panel-head"><div><h2>Weakest posts</h2><p>Seen by enough people, but few interacted.</p></div></div>
+              <div className="posts">{a.bottom.slice(0, 4).map(p => <PostCard key={p.id} p={p} />)}</div>
+            </section>
           </div>
         </>
       )}
 
       {paid.length > 0 && (
-        <section style={{ display: 'grid', gap: 10 }}>
-          <div className="section-title"><h2>Paid campaigns, followed through to the pipeline</h2></div>
-          <p className="muted small" style={{ maxWidth: '72ch' }}>Leads the platform reports, set against what actually arrived and moved forward. Progress after the first stage appears once the dealer’s or branch’s follow-up data is imported on the Data tab.</p>
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>Campaign</th><th>Channel</th>{seesMoney && <th className="num">Spend</th>}<th className="num">Leads reported</th><th className="num">Journeys</th><th className="num">Moved forward</th><th className="num">Converted</th>{seesMoney && <th className="num">Cost per converted</th>}</tr></thead>
-              <tbody>
-                {paid.map(c => (
-                  <tr key={c.code}>
-                    <td><b>{c.name}</b></td><td className="small">{c.channel}</td>
-                    {seesMoney && <td className="num">{inr(c.spend)}</td>}
-                    <td className="num">{num(c.platform_conversions)}</td>
-                    <td className="num">{c.journeys === 0 && (c.spend ?? 1) > 0 ? <span className="tag leak">0</span> : num(c.journeys)}</td>
-                    <td className="num">{num(c.progressed)}{c.journeys ? <span className="muted small"> ({pct(c.progressed / c.journeys)})</span> : null}</td>
-                    <td className="num">{num(c.converted)}</td>
-                    {seesMoney && <td className="num">{c.converted && c.spend ? inr(c.spend / c.converted) : '—'}</td>}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <section className="panel">
+          <div className="panel-head">
+            <div>
+              <h2>{reported > 0 ? `${pct(arrived / reported)} of reported leads reached your pipeline` : 'Paid campaigns, followed into the pipeline'}</h2>
+              <p>{reported > 0 ? `Platforms reported ${num(reported)} leads; ${num(arrived)} arrived as customer journeys, ${num(moved)} moved past the first stage and ${num(won)} converted. ` : ''}Stages after the first fill in once dealer or branch follow-up data is imported on the Data tab.</p>
+            </div>
+            <div className="legend">
+              <span><i style={{ background: 'color-mix(in srgb, var(--flow) 35%, var(--surface))' }} />Reported by platform</span>
+              <span><i style={{ background: 'var(--flow)' }} />Arrived</span>
+              <span><i style={{ background: 'color-mix(in srgb, var(--ok) 70%, var(--flow))' }} />Moved forward</span>
+              <span><i style={{ background: 'var(--ok)' }} />Converted</span>
+            </div>
+          </div>
+          <div className="funnel-list">
+            {[...paid].sort((x, y) => y.platform_conversions - x.platform_conversions || y.journeys - x.journeys).map(c => {
+              const top = Math.max(1, c.platform_conversions, c.journeys);
+              const missing = c.platform_conversions - c.journeys;
+              const bars: [string, string, number][] = [['reported', 'Reported', c.platform_conversions], ['arrived', 'Arrived', c.journeys], ['moved', 'Moved forward', c.progressed], ['won', 'Converted', c.converted]];
+              return (
+                <div className="funnel" key={c.code}>
+                  <div className="name"><b>{c.name}</b><span>{c.channel}{seesMoney && c.spend ? `, ${inr(c.spend)} spent` : ''}</span></div>
+                  <div className="funnel-bars">
+                    {bars.map(([k, label, v]) => (
+                      <div className={`fbar ${k}`} key={k} title={`${label}: ${num(v)}`}>
+                        <div className="tr"><i style={{ width: `${(v / top) * 100}%` }} /></div><span>{num(v)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="gap">
+                    {c.platform_conversions === 0 && c.journeys === 0 ? <span className="muted">No leads reported</span>
+                      : missing > 0 ? <><b style={{ color: 'var(--leak)' }}>{num(missing)}</b><span className="muted">reported leads not in your pipeline</span></>
+                        : <><b style={{ color: 'var(--ok)' }}>{pct(c.journeys ? c.progressed / c.journeys : 0)}</b><span className="muted">moved forward</span></>}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </section>
       )}
@@ -191,32 +350,66 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
   );
 }
 
-function InsightList({ title, items, tone }: { title: string; items: Insight[]; tone: 'ok' | 'leak' | 'flow' }) {
+function Verdict({ title, tone, icon, items, segments }: { title: string; tone: 'ok' | 'leak' | 'flow'; icon: React.ReactNode; items: Insight[]; segments: Segment[] }) {
   return (
-    <div className={`insights ${tone}`}>
-      <h2>{title}</h2>
-      {items.length === 0 ? <p className="muted small">Nothing clear yet.</p> : (
-        <ul>{items.map(i => <li key={i.title}><b>{i.title}</b><span className="muted small">{i.detail}</span></li>)}</ul>
+    <div className={`verdict ${tone}`}>
+      <header><span className="ic">{icon}</span><h2 style={{ fontSize: 17 }}>{title}</h2></header>
+      {items.length === 0 ? <p className="none">Nothing clear yet. This fills in as more posts reach a wider audience.</p> : (
+        <ul>
+          {items.map(i => {
+            const seg = segments.find(s => s.dimension === i.dimension && s.key === i.key);
+            const early = /^Early signal\. /.test(i.detail);
+            return (
+              <li key={i.title}>
+                <span className="t">{i.title}</span>
+                {seg && i.kind !== 'try' && <LiftMeter lift={seg.lift} />}
+                <span className="d">{i.detail.replace(/^Early signal\. /, '')}</span>
+                {early && <span className="early">Early signal, under 8 posts</span>}
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );
 }
 
-function PostList({ title, posts }: { title: string; posts: (ScoredPost & { postedAt: string | Date })[] }) {
+function LiftMeter({ lift }: { lift: number }) {
+  const pos = Math.max(-1, Math.min(1, Math.log(lift) / Math.log(4)));
+  const up = lift >= 1;
   return (
-    <section>
-      <div className="section-title"><h2>{title}</h2></div>
-      <div className="rows">
-        {posts.map(p => (
-          <div className="row" key={p.id}>
-            <div className="row-main">
-              <span style={{ minWidth: 0 }}>{p.permalink ? <a href={p.permalink} target="_blank" rel="noreferrer">{(p.caption ?? '(no caption)').split('\n')[0]!.slice(0, 90)}</a> : (p.caption ?? '(no caption)').split('\n')[0]!.slice(0, 90)}</span>
-              <b className="nowrap">{p.lift !== null ? `${p.lift.toFixed(1)}×` : '—'}</b>
-            </div>
-            <span className="muted small">{PLATFORM[p.platform]} {p.format}, {new Date(p.postedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}. {p.views != null ? `${num(p.views)} views, ` : p.reach != null ? `${num(p.reach)} reached, ` : 'Reach not available, '}{num(p.interactions)} interactions.</span>
-          </div>
-        ))}
+    <div className="meter" aria-label={`${lift.toFixed(1)} times usual engagement`}>
+      <div className="meter-track">
+        <span className="one" style={{ left: '50%' }} />
+        <i style={{ left: up ? '50%' : `${50 + pos * 50}%`, width: `${Math.abs(pos) * 50}%`, background: up ? 'var(--ok)' : 'var(--leak)' }} />
       </div>
-    </section>
+      <b style={{ color: up ? 'var(--ok)' : 'var(--leak)' }}>{lift.toFixed(1)}×</b>
+    </div>
   );
+}
+
+function PostCard({ p }: { p: Post }) {
+  const [broken, setBroken] = useState(false);
+  const cap = (p.caption ?? '').split('\n')[0]!.trim() || 'Untitled post';
+  const lift = p.lift;
+  const Fmt = /video|reel|short/.test(p.format) ? IconPlay : p.format === 'text' || p.format === 'link' ? IconText : IconImage;
+  const body = (
+    <>
+      <div className="thumb">
+        {p.thumbnailUrl && !broken ? <img src={p.thumbnailUrl} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)} />
+          : <div className="ph" style={{ background: `linear-gradient(135deg, ${COLOR[p.platform]}, color-mix(in srgb, ${COLOR[p.platform]} 55%, #131a33))` }}><Fmt /></div>}
+        {lift !== null && <span className={`badge ${lift >= 1.15 ? 'up' : lift <= 0.85 ? 'down' : 'flat'}`}>{lift.toFixed(1)}×</span>}
+        <span className={`pf ${p.platform}`}>{SHORT[p.platform]}</span>
+      </div>
+      <div className="body">
+        <span className="cap">{cap}</span>
+        <span className="meta">
+          <span>{new Date(p.postedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}, {p.format}</span>
+          <span>{p.views != null ? `${compact(p.views)} views` : p.reach != null ? `${compact(p.reach)} reached` : 'reach n/a'}</span>
+          <span>{compact(p.interactions)} interactions</span>
+        </span>
+      </div>
+    </>
+  );
+  return p.permalink ? <a className="post" href={p.permalink} target="_blank" rel="noreferrer">{body}</a> : <div className="post">{body}</div>;
 }

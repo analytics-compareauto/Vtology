@@ -26,7 +26,7 @@ export interface SocialConfig {
 
 interface Tokens { accessToken: string; refreshToken?: string | null; expiresAt?: Date | null; extra?: Record<string, string> | null }
 interface AccountSnap { platform: SocialPost['platform']; externalId: string; handle?: string | null; name: string; followers?: number | null; postsCount?: number | null; profileUrl?: string | null }
-interface PostSnap { platform: SocialPost['platform']; accountExternalId: string; externalId: string; postedAt: string; format: string; caption?: string | null; permalink?: string | null; durationS?: number | null;
+interface PostSnap { platform: SocialPost['platform']; accountExternalId: string; externalId: string; postedAt: string; format: string; caption?: string | null; permalink?: string | null; thumbnailUrl?: string | null; durationS?: number | null;
   views?: number | null; reach?: number | null; likes?: number | null; comments?: number | null; shares?: number | null; saves?: number | null; watchMinutes?: number | null; avgViewPct?: number | null }
 interface CampaignSnap { externalCode: string; name: string; channel: string; startDate?: string | null; endDate?: string | null; spendInr: number; conversions: number }
 interface LeadSnap { externalId: string; createdAt: string; name: string | null; phone: string | null; email: string | null; city: string | null; pincode: string | null; campaignId: string | null; campaignName: string | null; formName: string; pageName: string }
@@ -102,10 +102,10 @@ const meta = {
       // needs extra review. Ask for the richest view first, then step down to the bare posts, and read
       // reaction totals and reach from Page Insights instead (read_insights, which carries no names).
       const levels = [
-        { edge: 'posts', fields: 'id,message,created_time,permalink_url,shares,reactions.summary(total_count).limit(0),comments.summary(total_count).limit(0),attachments{media_type}' },
-        { edge: 'posts', fields: 'id,message,created_time,permalink_url,shares,reactions.summary(total_count).limit(0),attachments{media_type}' },
-        { edge: 'posts', fields: 'id,message,created_time,permalink_url,shares,attachments{media_type}' },
-        { edge: 'published_posts', fields: 'id,message,created_time,permalink_url' },
+        { edge: 'posts', fields: 'id,message,created_time,permalink_url,full_picture,shares,reactions.summary(total_count).limit(0),comments.summary(total_count).limit(0),attachments{media_type}' },
+        { edge: 'posts', fields: 'id,message,created_time,permalink_url,full_picture,shares,reactions.summary(total_count).limit(0),attachments{media_type}' },
+        { edge: 'posts', fields: 'id,message,created_time,permalink_url,full_picture,shares,attachments{media_type}' },
+        { edge: 'published_posts', fields: 'id,message,created_time,permalink_url,full_picture' },
       ];
       const before = posts.length;
       let level = 0;
@@ -113,10 +113,10 @@ const meta = {
         const L = levels[level]!;
         let url: string | null = `${G}/${pg.id}/${L.edge}?fields=${L.fields}&since=${sinceUnix}&limit=100&access_token=${tok}`;
         for (let page = 0; url && page < 5; page++) {
-          const r: { data: { id: string; message?: string; created_time: string; permalink_url?: string; shares?: { count: number }; reactions?: { summary?: { total_count: number } }; comments?: { summary?: { total_count: number } }; attachments?: { data: { media_type?: string }[] } }[]; paging?: { next?: string } } = await getJson(f, url);
+          const r: { data: { id: string; message?: string; created_time: string; permalink_url?: string; full_picture?: string; shares?: { count: number }; reactions?: { summary?: { total_count: number } }; comments?: { summary?: { total_count: number } }; attachments?: { data: { media_type?: string }[] } }[]; paging?: { next?: string } } = await getJson(f, url);
           for (const p of r.data) {
             const mt = p.attachments?.data?.[0]?.media_type ?? '';
-            posts.push({ platform: 'facebook', accountExternalId: pg.id, externalId: p.id, postedAt: p.created_time, caption: p.message ?? null, permalink: p.permalink_url ?? null,
+            posts.push({ platform: 'facebook', accountExternalId: pg.id, externalId: p.id, postedAt: p.created_time, caption: p.message ?? null, permalink: p.permalink_url ?? null, thumbnailUrl: p.full_picture ?? null,
               format: mt === 'video' ? 'video' : mt === 'album' ? 'carousel' : mt === 'photo' ? 'image' : mt === 'link' || mt === 'share' ? 'link' : 'text',
               likes: p.reactions?.summary?.total_count ?? null, comments: p.comments?.summary?.total_count ?? null, shares: p.shares?.count ?? (level < 3 ? 0 : null) });
           }
@@ -140,13 +140,13 @@ const meta = {
       if (!ig) continue;
       accounts.push({ platform: 'instagram', externalId: ig.id, handle: ig.username ?? null, name: ig.name ?? ig.username ?? pg.name, followers: ig.followers_count ?? null, postsCount: ig.media_count ?? null, profileUrl: ig.username ? `https://instagram.com/${ig.username}` : null });
       try {
-        let url: string | null = `${G}/${ig.id}/media?fields=id,caption,media_type,media_product_type,permalink,timestamp,like_count,comments_count&limit=100&access_token=${tok}`;
+        let url: string | null = `${G}/${ig.id}/media?fields=id,caption,media_type,media_product_type,permalink,timestamp,like_count,comments_count,media_url,thumbnail_url&limit=100&access_token=${tok}`;
         let done = false;
         for (let page = 0; url && !done && page < 5; page++) {
-          const r: { data: { id: string; caption?: string; media_type?: string; media_product_type?: string; permalink?: string; timestamp: string; like_count?: number; comments_count?: number }[]; paging?: { next?: string } } = await getJson(f, url);
+          const r: { data: { id: string; caption?: string; media_type?: string; media_product_type?: string; permalink?: string; timestamp: string; like_count?: number; comments_count?: number; media_url?: string; thumbnail_url?: string }[]; paging?: { next?: string } } = await getJson(f, url);
           for (const m of r.data) {
             if (new Date(m.timestamp) < since) { done = true; break; }
-            const snap: PostSnap = { platform: 'instagram', accountExternalId: ig.id, externalId: m.id, postedAt: m.timestamp, caption: m.caption ?? null, permalink: m.permalink ?? null,
+            const snap: PostSnap = { platform: 'instagram', accountExternalId: ig.id, externalId: m.id, postedAt: m.timestamp, caption: m.caption ?? null, permalink: m.permalink ?? null, thumbnailUrl: m.thumbnail_url ?? (m.media_type === 'VIDEO' ? null : m.media_url ?? null),
               format: m.media_product_type === 'REELS' ? 'reel' : m.media_type === 'CAROUSEL_ALBUM' ? 'carousel' : m.media_type === 'VIDEO' ? 'video' : 'image',
               likes: m.like_count ?? null, comments: m.comments_count ?? null };
             igPosts.push({ snap, tok });
@@ -285,13 +285,13 @@ const youtube = {
         for (const [id, views, minutes, pct, shares] of rep.rows ?? []) analytics.set(id, { views, minutes, pct, shares });
       } catch (e) { warnings.push(`YouTube Analytics: ${(e as Error).message}`); }
       for (let i = 0; i < ids.length; i += 50) {
-        const vs = await getJson<{ items: { id: string; snippet: { publishedAt: string; title: string; description?: string }; statistics?: { viewCount?: string; likeCount?: string; commentCount?: string }; contentDetails?: { duration?: string } }[] }>(f,
+        const vs = await getJson<{ items: { id: string; snippet: { publishedAt: string; title: string; description?: string; thumbnails?: Record<string, { url: string }> }; statistics?: { viewCount?: string; likeCount?: string; commentCount?: string }; contentDetails?: { duration?: string } }[] }>(f,
           `${Y}/videos?part=snippet,statistics,contentDetails&id=${ids.slice(i, i + 50).join(',')}`, auth);
         for (const v of vs.items) {
           const secs = isoSeconds(v.contentDetails?.duration);
           const a = analytics.get(v.id);
           posts.push({ platform: 'youtube', accountExternalId: c.id, externalId: v.id, postedAt: v.snippet.publishedAt, caption: `${v.snippet.title}\n${(v.snippet.description ?? '').slice(0, 500)}`,
-            permalink: `https://youtube.com/watch?v=${v.id}`, durationS: secs, format: secs !== null && secs <= 60 ? 'short' : 'video',
+            permalink: `https://youtube.com/watch?v=${v.id}`, thumbnailUrl: (v.snippet.thumbnails?.medium ?? v.snippet.thumbnails?.high ?? v.snippet.thumbnails?.default)?.url ?? null, durationS: secs, format: secs !== null && secs <= 60 ? 'short' : 'video',
             views: Number(v.statistics?.viewCount ?? a?.views ?? 0), likes: Number(v.statistics?.likeCount ?? 0), comments: Number(v.statistics?.commentCount ?? 0),
             shares: a?.shares ?? null, watchMinutes: a?.minutes ?? null, avgViewPct: a?.pct ?? null });
         }
@@ -393,13 +393,13 @@ export async function syncConnection(deps: Deps, tenantId: string, connectionId:
       const accountId = idOf.get(`${p.platform}:${p.accountExternalId}`);
       if (!accountId) continue;
       await sql.query(
-        `insert into vt.social_posts (tenant_id, account_id, external_id, posted_at, format, caption, permalink, duration_s, views, reach, likes, comments, shares, saves, watch_minutes, avg_view_pct, metrics_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, now())
-         on conflict (tenant_id, account_id, external_id) do update set format = excluded.format, caption = excluded.caption, permalink = excluded.permalink, duration_s = excluded.duration_s,
+        `insert into vt.social_posts (tenant_id, account_id, external_id, posted_at, format, caption, permalink, duration_s, views, reach, likes, comments, shares, saves, watch_minutes, avg_view_pct, thumbnail_url, metrics_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17, now())
+         on conflict (tenant_id, account_id, external_id) do update set format = excluded.format, caption = excluded.caption, permalink = excluded.permalink, duration_s = excluded.duration_s, thumbnail_url = coalesce(excluded.thumbnail_url, vt.social_posts.thumbnail_url),
            views = coalesce(excluded.views, vt.social_posts.views), reach = coalesce(excluded.reach, vt.social_posts.reach), likes = coalesce(excluded.likes, vt.social_posts.likes), comments = coalesce(excluded.comments, vt.social_posts.comments), shares = coalesce(excluded.shares, vt.social_posts.shares), saves = coalesce(excluded.saves, vt.social_posts.saves),
            watch_minutes = coalesce(excluded.watch_minutes, vt.social_posts.watch_minutes), avg_view_pct = coalesce(excluded.avg_view_pct, vt.social_posts.avg_view_pct), metrics_at = now()`,
         [tenantId, accountId, p.externalId, p.postedAt, p.format, p.caption ?? null, p.permalink ?? null, p.durationS ?? null, p.views ?? null, p.reach ?? null, p.likes ?? null,
-         p.comments ?? null, p.shares ?? null, p.saves ?? null, p.watchMinutes ?? null, p.avgViewPct ?? null]);
+         p.comments ?? null, p.shares ?? null, p.saves ?? null, p.watchMinutes ?? null, p.avgViewPct ?? null, p.thumbnailUrl ?? null]);
     }
     for (const c2 of r.campaigns) await sql.query(
       `insert into vt.campaigns (tenant_id, external_code, name, channel, start_date, end_date, spend_inr, platform_reported_conversions) values ($1,$2,$3,$4,$5,$6,$7,$8)
@@ -483,13 +483,13 @@ export async function socialOverview(deps: Deps, ctx: Ctx) {
       `select id, provider, label, status, scopes, connected_at, last_sync_at, last_error from vt.social_connections where tenant_id = $1 order by provider`, [ctx.tenantId]);
     const accountsRaw = await sql.query<{ id: string; platform: SocialPost['platform']; name: string; handle: string | null; followers: number | null; posts_count: number | null; profile_url: string | null; is_competitor: boolean }>(
       `select id, platform, name, handle, followers, posts_count, profile_url, is_competitor from vt.social_accounts where tenant_id = $1 order by platform, name`, [ctx.tenantId]);
-    const postsRaw = await sql.query<{ id: string; account_id: string; posted_at: string; format: string; caption: string | null; permalink: string | null; views: string | null; reach: string | null; likes: string | null; comments: string | null; shares: string | null; saves: string | null; watch_minutes: string | null; avg_view_pct: string | null }>(
-      `select id, account_id, posted_at, format, caption, permalink, views, reach, likes, comments, shares, saves, watch_minutes, avg_view_pct
+    const postsRaw = await sql.query<{ id: string; account_id: string; posted_at: string; format: string; caption: string | null; permalink: string | null; views: string | null; reach: string | null; likes: string | null; comments: string | null; shares: string | null; saves: string | null; watch_minutes: string | null; avg_view_pct: string | null; thumbnail_url: string | null }>(
+      `select id, account_id, posted_at, format, caption, permalink, thumbnail_url, views, reach, likes, comments, shares, saves, watch_minutes, avg_view_pct
          from vt.social_posts where tenant_id = $1 and posted_at > now() - interval '200 days' order by posted_at desc limit 2000`, [ctx.tenantId]);
     const num = (x: string | null) => (x === null ? null : Number(x));
     const platformOf = new Map(accountsRaw.map(a => [a.id, a.platform]));
     const accounts: SocialAccount[] = accountsRaw.map(a => ({ id: a.id, platform: a.platform, name: a.name, handle: a.handle, followers: a.followers }));
-    const posts: SocialPost[] = postsRaw.map(p => ({ id: p.id, accountId: p.account_id, platform: platformOf.get(p.account_id)!, postedAt: new Date(p.posted_at), format: p.format, caption: p.caption, permalink: p.permalink,
+    const posts: SocialPost[] = postsRaw.map(p => ({ id: p.id, accountId: p.account_id, platform: platformOf.get(p.account_id)!, postedAt: new Date(p.posted_at), format: p.format, caption: p.caption, permalink: p.permalink, thumbnailUrl: p.thumbnail_url,
       views: num(p.views), reach: num(p.reach), likes: num(p.likes), comments: num(p.comments), shares: num(p.shares), saves: num(p.saves), watchMinutes: num(p.watch_minutes), avgViewPct: num(p.avg_view_pct) }));
     const analysis = analyzeSocial(ctx.industry, accounts, posts, ctx.now);
     return {

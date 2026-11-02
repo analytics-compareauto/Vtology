@@ -16,6 +16,7 @@ export interface SocialPost {
   format: string;
   caption: string | null;
   permalink?: string | null;
+  thumbnailUrl?: string | null;
   views?: number | null; reach?: number | null; likes?: number | null; comments?: number | null; shares?: number | null; saves?: number | null;
   watchMinutes?: number | null; avgViewPct?: number | null;
 }
@@ -28,6 +29,8 @@ export interface ScoredPost extends SocialPost { interactions: number; engagemen
 export interface SocialAnalysis {
   windowDays: number;
   posts: number;
+  /** Week by week, per platform: posts, interactions and audience (reach, else views). Weeks start Monday, IST. */
+  weekly: { week: string; platform: string; posts: number; interactions: number; audience: number }[];
   /** Posts left out of comparisons because too few people saw them for a ratio to mean anything. */
   lowAudience: number;
   byPlatform: { platform: string; posts: number; views: number; interactions: number; medianEngagement: number | null }[];
@@ -219,6 +222,7 @@ export function analyzeSocial(industry: Industry, accounts: SocialAccount[], pos
   return {
     windowDays, posts: scored.length,
     lowAudience: scored.filter(p => p.engagement === null).length,
+    weekly: weeklyOf(scored),
     byPlatform: platforms.map(pl => {
       const ps = scored.filter(p => p.platform === pl);
       const es = ps.filter(p => p.engagement !== null).map(p => p.engagement!);
@@ -229,4 +233,22 @@ export function analyzeSocial(industry: Industry, accounts: SocialAccount[], pos
     top: [...rated].sort((a, b) => b.lift! - a.lift!).slice(0, 5),
     bottom: [...rated].sort((a, b) => a.lift! - b.lift!).slice(0, 5),
   };
+}
+
+/** Monday (IST) of the week a post went out, as YYYY-MM-DD. */
+export function weekOf(d: Date): string {
+  const ist = new Date(d.getTime() + 330 * 60_000);
+  const dow = (ist.getUTCDay() + 6) % 7;
+  return new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate() - dow)).toISOString().slice(0, 10);
+}
+
+function weeklyOf(posts: ScoredPost[]): SocialAnalysis['weekly'] {
+  const m = new Map<string, SocialAnalysis['weekly'][number]>();
+  for (const p of posts) {
+    const week = weekOf(p.postedAt), k = `${week}|${p.platform}`;
+    const w = m.get(k) ?? { week, platform: p.platform, posts: 0, interactions: 0, audience: 0 };
+    w.posts++; w.interactions += p.interactions; w.audience += n0(p.reach ?? p.views);
+    m.set(k, w);
+  }
+  return [...m.values()].sort((a, b) => a.week.localeCompare(b.week) || a.platform.localeCompare(b.platform));
 }

@@ -602,6 +602,10 @@ grant select on vt.social_connections, vt.social_accounts, vt.social_posts, vt.s
 grant execute on function vt.sees_social(uuid) to authenticated;
 revoke all on vt.social_tokens from authenticated;
 
+-- ===== 20261103000007_social_thumbnails.sql =====
+-- Post thumbnails for the social dashboard (a picture link from the platform, refreshed on each sync)
+alter table vt.social_posts add column if not exists thumbnail_url text;
+
 create schema if not exists vt_meta;
 create table if not exists vt_meta.schema_migrations (id text primary key, applied_at timestamptz not null default now());
-insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social') on conflict do nothing;
+insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails') on conflict do nothing;

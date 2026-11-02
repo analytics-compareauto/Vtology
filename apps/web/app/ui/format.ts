@@ -10,6 +10,15 @@ export function inr(v: number | string | null | undefined): string {
   return `₹${Math.round(n).toLocaleString('en-IN')}`;
 }
 export const pct = (x: number) => `${Math.round(x * 100)}%`;
+/** 1.2K, 34K, 1.5M: international short form for chart axes and tiles. */
+export function compact(x: number): string {
+  const a = Math.abs(x);
+  if (a >= 1e6) return `${(x / 1e6).toFixed(a >= 1e7 ? 0 : 1).replace(/\.0$/, '')}M`;
+  if (a >= 1e3) return `${(x / 1e3).toFixed(a >= 1e4 ? 0 : 1).replace(/\.0$/, '')}K`;
+  return `${Math.round(x)}`;
+}
+/** Signed percent change, e.g. +34% or −12%. */
+export const change = (now: number, before: number) => before > 0 ? `${now >= before ? '+' : '−'}${Math.abs(Math.round(((now - before) / before) * 100))}%` : now > 0 ? 'new' : '0%';
 export const num = (x: number) => x.toLocaleString('en-IN');
 export function ago(iso: string): string {
   const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
