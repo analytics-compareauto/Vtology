@@ -121,7 +121,8 @@ function score(industry: Industry, p: SocialPost, followers: number | null | und
   const audience = p.reach ?? p.views ?? null;
   const base = audience !== null ? audience : n0(followers);
   // 2 likes on 3 views is not a 67% engagement rate; it is noise. Leave such posts out of ratios.
-  const reliable = audience === null ? base > 0 : audience >= MIN_AUDIENCE;
+  // the follower count is only a fair stand-in when it is big enough not to turn a few likes into a huge rate
+  const reliable = base >= MIN_AUDIENCE;
   return {
     ...p, interactions,
     engagement: reliable && base > 0 ? interactions / base : null,
@@ -217,7 +218,7 @@ export function analyzeSocial(industry: Industry, accounts: SocialAccount[], pos
   const platforms = [...new Set(scored.map(p => p.platform))];
   return {
     windowDays, posts: scored.length,
-    lowAudience: scored.filter(p => p.engagement === null && (p.reach ?? p.views ?? null) !== null).length,
+    lowAudience: scored.filter(p => p.engagement === null).length,
     byPlatform: platforms.map(pl => {
       const ps = scored.filter(p => p.platform === pl);
       const es = ps.filter(p => p.engagement !== null).map(p => p.engagement!);

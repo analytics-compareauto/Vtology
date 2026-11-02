@@ -174,13 +174,14 @@ const meta = {
     posts.push(...igPosts.map(p => p.snap));
     // Facebook posts read without reaction counts: totals and reach from post insights (no names involved)
     const fbSkipped = await pool(fbPosts.filter(p => !opts.fresh.has(p.snap.externalId)), 10, opts.deadline, async ({ snap, tok }) => {
-      for (const metrics of ['post_reactions_by_type_total,post_impressions_unique', 'post_reactions_by_type_total', 'post_impressions_unique']) {
+      // Meta replaced post_impressions_unique with post_total_media_view_unique; ask for the new one first
+      for (const metrics of ['post_reactions_by_type_total,post_total_media_view_unique', 'post_reactions_by_type_total,post_impressions_unique', 'post_reactions_by_type_total', 'post_total_media_view_unique', 'post_impressions_unique']) {
         try {
           const ins = await getJson<{ data: { name: string; values?: { value: number | Record<string, number> }[] }[] }>(f, `${G}/${snap.externalId}/insights?metric=${metrics}&access_token=${tok}`);
           for (const d of ins.data) {
             const v = d.values?.[0]?.value;
             if (d.name === 'post_reactions_by_type_total') snap.likes = typeof v === 'number' ? v : v ? Object.values(v).reduce((x, y) => x + y, 0) : 0;
-            else if (d.name === 'post_impressions_unique' && typeof v === 'number') snap.reach = v;
+            else if ((d.name === 'post_total_media_view_unique' || d.name === 'post_impressions_unique') && typeof v === 'number' && v > 0) snap.reach = v;
           }
           break;
         } catch { /* try a smaller metric set */ }

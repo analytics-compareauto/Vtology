@@ -139,7 +139,7 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
                 {DIMS.map(d => <button key={d.id} aria-pressed={dim === d.id} onClick={() => setDim(d.id)}>{d.label}</button>)}
               </div>
             </div>
-            <p className="muted small" style={{ maxWidth: '72ch' }}>1× is each account’s typical engagement. Groups with fewer than 3 posts are left out; groups under 8 posts are early signals.{a.lowAudience ? ` ${num(a.lowAudience)} posts seen by fewer than 50 people are not compared, because a few likes on a handful of views would look like a huge win.` : ''}</p>
+            <p className="muted small" style={{ maxWidth: '72ch' }}>1× is each account’s typical engagement. Groups with fewer than 3 posts are left out; groups under 8 posts are early signals.{a.lowAudience ? ` ${num(a.lowAudience)} posts reached fewer than 50 people (or have no reach figure and a following under 50), so they are not compared: a few likes on a handful of views would look like a huge win.` : ''}</p>
             {segs.length === 0 ? <div className="empty">Not enough posts in any group yet.</div> : (
               <div className="lift-list">
                 {segs.map(sg => (
@@ -213,7 +213,7 @@ function PostList({ title, posts }: { title: string; posts: (ScoredPost & { post
               <span style={{ minWidth: 0 }}>{p.permalink ? <a href={p.permalink} target="_blank" rel="noreferrer">{(p.caption ?? '(no caption)').split('\n')[0]!.slice(0, 90)}</a> : (p.caption ?? '(no caption)').split('\n')[0]!.slice(0, 90)}</span>
               <b className="nowrap">{p.lift !== null ? `${p.lift.toFixed(1)}×` : '—'}</b>
             </div>
-            <span className="muted small">{PLATFORM[p.platform]} {p.format}, {new Date(p.postedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}. {num(p.views ?? p.reach ?? 0)} {p.views ? 'views' : 'reached'}, {num(p.interactions)} interactions.</span>
+            <span className="muted small">{PLATFORM[p.platform]} {p.format}, {new Date(p.postedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}. {p.views != null ? `${num(p.views)} views, ` : p.reach != null ? `${num(p.reach)} reached, ` : 'Reach not available, '}{num(p.interactions)} interactions.</span>
           </div>
         ))}
       </div>
