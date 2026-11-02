@@ -63,7 +63,7 @@ async function getJson<T>(f: typeof fetch, url: string, init?: RequestInit): Pro
 }
 
 // ===================================================================== Meta (Instagram + Facebook)
-const META_SCOPES = ['pages_show_list', 'pages_read_engagement', 'pages_read_user_content', 'read_insights', 'instagram_basic', 'instagram_manage_insights', 'business_management', 'ads_read', 'leads_retrieval', 'pages_manage_ads'];
+const META_SCOPES = ['pages_show_list', 'pages_read_engagement', 'read_insights', 'instagram_basic', 'instagram_manage_insights', 'business_management', 'ads_read', 'leads_retrieval', 'pages_manage_ads'];
 
 const meta = {
   graph: (cfg: SocialConfig) => `https://graph.facebook.com/${cfg.meta?.version ?? 'v23.0'}`,
@@ -97,8 +97,13 @@ const meta = {
     for (const pg of pages.data) {
       const tok = encodeURIComponent(pg.access_token);
       accounts.push({ platform: 'facebook', externalId: pg.id, handle: pg.username ?? null, name: pg.name, followers: pg.followers_count ?? pg.fan_count ?? null, profileUrl: pg.link ?? `https://facebook.com/${pg.id}` });
-      try {
-        let url: string | null = `${G}/${pg.id}/posts?fields=id,message,created_time,permalink_url,shares,reactions.summary(total_count).limit(0),comments.summary(total_count).limit(0),attachments{media_type}&since=${sinceUnix}&limit=100&access_token=${tok}`;
+      // Comment counts are "user content" to Meta and need extra review; without it, fetch the posts without them.
+      const fbFields = (withComments: boolean) => `id,message,created_time,permalink_url,shares,reactions.summary(total_count).limit(0),${withComments ? 'comments.summary(total_count).limit(0),' : ''}attachments{media_type}`;
+      const fbFirst = (withComments: boolean) => `${G}/${pg.id}/posts?fields=${fbFields(withComments)}&since=${sinceUnix}&limit=100&access_token=${tok}`;
+      let withComments = true;
+      const before = posts.length;
+      for (let attempt = 0; attempt < 2; attempt++) try {
+        let url: string | null = fbFirst(withComments);
         for (let page = 0; url && page < 5; page++) {
           const r: { data: { id: string; message?: string; created_time: string; permalink_url?: string; shares?: { count: number }; reactions?: { summary?: { total_count: number } }; comments?: { summary?: { total_count: number } }; attachments?: { data: { media_type?: string }[] } }[]; paging?: { next?: string } } = await getJson(f, url);
           for (const p of r.data) {
@@ -109,7 +114,13 @@ const meta = {
           }
           url = r.paging?.next ?? null;
         }
-      } catch (e) { warnings.push(`Facebook posts for ${pg.name}: ${(e as Error).message}`); }
+        break;
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (withComments && /pages_read_user_content|Page Public Content Access|\(#10\)/.test(msg)) { posts.length = before; withComments = false; continue; }
+        warnings.push(`Facebook posts for ${pg.name}: ${msg}`); break;
+      }
+      if (!withComments && posts.length > before) warnings.push(`Facebook comment counts for ${pg.name} need Meta's "Page user content" approval; reactions and shares are counted.`);
 
       const ig = pg.instagram_business_account;
       if (!ig) continue;

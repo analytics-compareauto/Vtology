@@ -21,6 +21,8 @@ function fakePlatforms(): typeof fetch {
     if (url.startsWith(`${G}/me/permissions`)) return ok({ data: [{ permission: 'instagram_basic', status: 'granted' }, { permission: 'ads_read', status: 'declined' }] });
     if (url.startsWith(`${G}/me/accounts`)) return ok({ data: [{ id: 'PAGE1', name: 'CompareAuto', username: 'compareauto', followers_count: 52000, access_token: 'PAGE-TOKEN',
       instagram_business_account: { id: 'IG1', username: 'compareauto.in', name: 'CompareAuto', followers_count: 31000, media_count: 410 } }] });
+    // like the real API without "Page user content" approval: asking for comment counts is refused
+    if (url.startsWith(`${G}/PAGE1/posts`) && decodeURIComponent(url).includes('comments.summary')) return new Response(JSON.stringify({ error: { message: "(#10) This endpoint requires the 'pages_read_user_content' permission or the 'Page Public Content Access' feature.", code: 10 } }), { status: 400 });
     if (url.startsWith(`${G}/PAGE1/posts`)) return ok({ data: [
       { id: 'PAGE1_1', message: 'Creta vs Seltos: which one should you buy?', created_time: '2026-10-20T13:30:00+0000', permalink_url: 'https://facebook.com/1', attachments: { data: [{ media_type: 'video' }] }, reactions: { summary: { total_count: 900 } }, comments: { summary: { total_count: 120 } }, shares: { count: 80 } },
       { id: 'PAGE1_2', message: 'Best price on Nexon this week', created_time: '2026-10-21T04:00:00+0000', attachments: { data: [{ media_type: 'photo' }] }, reactions: { summary: { total_count: 60 } }, comments: { summary: { total_count: 3 } } },
@@ -83,6 +85,15 @@ describe('social analysis', () => {
 
 describe('social footprint end to end', () => {
   let s: any, ws: string;
+
+  it('does not let a post with a handful of views top the rankings', () => {
+    const acc = [{ id: 'yt', platform: 'youtube' as const, followers: 60 }];
+    const mk = (i: number, views: number, likes: number) => ({ id: `p${i}`, accountId: 'yt', platform: 'youtube' as const, externalId: `p${i}`, postedAt: new Date(NOW.getTime() - i * 86_400_000), caption: 'Creta vs Seltos', format: 'short', views, likes, comments: 0 });
+    const posts = [mk(1, 3, 2), mk(2, 5, 3), ...Array.from({ length: 6 }, (_, i) => mk(i + 3, 800 + i * 100, 20 + i))];
+    const a = analyzeSocial('Automotive', acc as never, posts as never, NOW);
+    expect(a.lowAudience).toBe(2);
+    expect(a.top.every(p => (p.views ?? 0) >= 50)).toBe(true);
+  });
 
   it('sample workspaces come with a sample social footprint and findings', async () => {
     s = (await call(null, 'POST', '/auth/login', { email: 'sarvesh@vanaya.test', password: 'demo' })).body;
