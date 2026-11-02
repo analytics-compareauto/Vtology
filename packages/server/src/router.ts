@@ -58,8 +58,14 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
       const fromScheduler = deps.cronSecret ? req.headers.get('authorization') === `Bearer ${deps.cronSecret}` : /vercel-cron/i.test(req.headers.get('user-agent') ?? '');
       if (!internal && !fromScheduler) throw new HttpError(401, 'Not allowed.');
       const one = url.searchParams.get('connection'), tenant = url.searchParams.get('tenant');
-      if (internal && one && tenant) return json(200, await syncConnection(deps, tenant, one));
-      return json(200, await syncAll(deps, { selfUrl: deps.social?.publicUrl, internalKey }));
+      if (internal && one && tenant) {
+        const r = await syncConnection(deps, tenant, one);
+        console.log(`[vtology] daily sync, connection ${one}: ${r.accounts} accounts, ${r.posts} posts${r.warnings.length ? `; ${r.warnings.length} warnings` : ''}`);
+        return json(200, r);
+      }
+      const r = await syncAll(deps, { selfUrl: deps.social?.publicUrl, internalKey });
+      console.log(`[vtology] daily sync: ${r.started} connections due, ${r.ok} synced, ${r.failed} failed`);
+      return json(200, r);
     }
     const userId = await authenticate(req, deps);
     if (top === 'GET workspaces') return json(200, await listWorkspaces(deps, userId));
