@@ -22,11 +22,13 @@ function fakePlatforms(): typeof fetch {
     if (url.startsWith(`${G}/me/accounts`)) return ok({ data: [{ id: 'PAGE1', name: 'CompareAuto', username: 'compareauto', followers_count: 52000, access_token: 'PAGE-TOKEN',
       instagram_business_account: { id: 'IG1', username: 'compareauto.in', name: 'CompareAuto', followers_count: 31000, media_count: 410 } }] });
     // like the real API without "Page user content" approval: asking for comment counts is refused
-    if (url.startsWith(`${G}/PAGE1/posts`) && decodeURIComponent(url).includes('comments.summary')) return new Response(JSON.stringify({ error: { message: "(#10) This endpoint requires the 'pages_read_user_content' permission or the 'Page Public Content Access' feature.", code: 10 } }), { status: 400 });
+    if (url.startsWith(`${G}/PAGE1/posts`) && /comments\.summary|reactions\.summary/.test(decodeURIComponent(url))) return new Response(JSON.stringify({ error: { message: "(#10) This endpoint requires the 'pages_read_user_content' permission or the 'Page Public Content Access' feature.", code: 10 } }), { status: 400 });
     if (url.startsWith(`${G}/PAGE1/posts`)) return ok({ data: [
       { id: 'PAGE1_1', message: 'Creta vs Seltos: which one should you buy?', created_time: '2026-10-20T13:30:00+0000', permalink_url: 'https://facebook.com/1', attachments: { data: [{ media_type: 'video' }] }, reactions: { summary: { total_count: 900 } }, comments: { summary: { total_count: 120 } }, shares: { count: 80 } },
       { id: 'PAGE1_2', message: 'Best price on Nexon this week', created_time: '2026-10-21T04:00:00+0000', attachments: { data: [{ media_type: 'photo' }] }, reactions: { summary: { total_count: 60 } }, comments: { summary: { total_count: 3 } } },
     ] });
+    if (url.startsWith(`${G}/PAGE1_1/insights`)) return ok({ data: [{ name: 'post_reactions_by_type_total', values: [{ value: { like: 800, love: 100 } }] }, { name: 'post_impressions_unique', values: [{ value: 40000 }] }] });
+    if (url.startsWith(`${G}/PAGE1_2/insights`)) return ok({ data: [{ name: 'post_reactions_by_type_total', values: [{ value: { like: 60 } }] }, { name: 'post_impressions_unique', values: [{ value: 7000 }] }] });
     if (url.startsWith(`${G}/IG1/media`)) return ok({ data: [
       { id: 'M1', caption: 'Thar vs Jimny face-off', media_type: 'VIDEO', media_product_type: 'REELS', permalink: 'https://instagram.com/p/1', timestamp: '2026-10-25T14:00:00+0000', like_count: 4200, comments_count: 310 },
       { id: 'M2', caption: 'On-road price list for Swift', media_type: 'IMAGE', media_product_type: 'FEED', permalink: 'https://instagram.com/p/2', timestamp: '2026-10-26T05:00:00+0000', like_count: 300, comments_count: 12 },
@@ -150,6 +152,10 @@ describe('social footprint end to end', () => {
       { external_id: 'M1', format: 'reel', reach: '60000', saves: '900', views: null },   // fell back when "views" was refused
       { external_id: 'M2', format: 'image', reach: '9000', saves: '20', views: '11000' },
     ]);
+    // Facebook reactions and reach came from post insights after Meta refused the reaction lists
+    const fb = await db.admin.query<{ external_id: string; likes: string | null; reach: string | null }>(`select external_id, likes::text as likes, reach::text as reach from vt.social_posts where external_id like 'PAGE1_%' order by external_id`);
+    expect(fb).toEqual([{ external_id: 'PAGE1_1', likes: '900', reach: '40000' }, { external_id: 'PAGE1_2', likes: '60', reach: '7000' }]);
+    expect(JSON.stringify(r.body.connections[0])).toMatch(/Page Insights/);
     const camp = r.body.campaigns.find((c: any) => c.code === 'meta:777');
     expect(camp).toMatchObject({ name: 'SUV comparison leads', channel: 'Meta ads', spend: null, platform_conversions: 138, journeys: 2, progressed: 0 }); // data stewards don't see money
     // lead-ad leads became customers (hashed phone) and inquiry journeys, matched by the pipeline

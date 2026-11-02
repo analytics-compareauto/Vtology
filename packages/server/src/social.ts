@@ -94,33 +94,47 @@ const meta = {
     if (!pages.data.length) warnings.push('No Facebook Pages were shared during approval. Reconnect and tick the brand’s Page (and its Instagram account).');
 
     const igPosts: { snap: PostSnap; tok: string }[] = [];
+    const fbPosts: { snap: PostSnap; tok: string; needReactions: boolean }[] = [];
     for (const pg of pages.data) {
       const tok = encodeURIComponent(pg.access_token);
       accounts.push({ platform: 'facebook', externalId: pg.id, handle: pg.username ?? null, name: pg.name, followers: pg.followers_count ?? pg.fan_count ?? null, profileUrl: pg.link ?? `https://facebook.com/${pg.id}` });
-      // Comment counts are "user content" to Meta and need extra review; without it, fetch the posts without them.
-      const fbFields = (withComments: boolean) => `id,message,created_time,permalink_url,shares,reactions.summary(total_count).limit(0),${withComments ? 'comments.summary(total_count).limit(0),' : ''}attachments{media_type}`;
-      const fbFirst = (withComments: boolean) => `${G}/${pg.id}/posts?fields=${fbFields(withComments)}&since=${sinceUnix}&limit=100&access_token=${tok}`;
-      let withComments = true;
+      // Reaction and comment lists name the people who reacted, so Meta treats them as "user content" that
+      // needs extra review. Ask for the richest view first, then step down to the bare posts, and read
+      // reaction totals and reach from Page Insights instead (read_insights, which carries no names).
+      const levels = [
+        { edge: 'posts', fields: 'id,message,created_time,permalink_url,shares,reactions.summary(total_count).limit(0),comments.summary(total_count).limit(0),attachments{media_type}' },
+        { edge: 'posts', fields: 'id,message,created_time,permalink_url,shares,reactions.summary(total_count).limit(0),attachments{media_type}' },
+        { edge: 'posts', fields: 'id,message,created_time,permalink_url,shares,attachments{media_type}' },
+        { edge: 'published_posts', fields: 'id,message,created_time,permalink_url' },
+      ];
       const before = posts.length;
-      for (let attempt = 0; attempt < 2; attempt++) try {
-        let url: string | null = fbFirst(withComments);
+      let level = 0;
+      for (; level < levels.length; level++) try {
+        const L = levels[level]!;
+        let url: string | null = `${G}/${pg.id}/${L.edge}?fields=${L.fields}&since=${sinceUnix}&limit=100&access_token=${tok}`;
         for (let page = 0; url && page < 5; page++) {
           const r: { data: { id: string; message?: string; created_time: string; permalink_url?: string; shares?: { count: number }; reactions?: { summary?: { total_count: number } }; comments?: { summary?: { total_count: number } }; attachments?: { data: { media_type?: string }[] } }[]; paging?: { next?: string } } = await getJson(f, url);
           for (const p of r.data) {
             const mt = p.attachments?.data?.[0]?.media_type ?? '';
             posts.push({ platform: 'facebook', accountExternalId: pg.id, externalId: p.id, postedAt: p.created_time, caption: p.message ?? null, permalink: p.permalink_url ?? null,
               format: mt === 'video' ? 'video' : mt === 'album' ? 'carousel' : mt === 'photo' ? 'image' : mt === 'link' || mt === 'share' ? 'link' : 'text',
-              likes: p.reactions?.summary?.total_count ?? null, comments: p.comments?.summary?.total_count ?? null, shares: p.shares?.count ?? 0 });
+              likes: p.reactions?.summary?.total_count ?? null, comments: p.comments?.summary?.total_count ?? null, shares: p.shares?.count ?? (level < 3 ? 0 : null) });
           }
           url = r.paging?.next ?? null;
         }
         break;
       } catch (e) {
+        posts.length = before;
         const msg = (e as Error).message;
-        if (withComments && /pages_read_user_content|Page Public Content Access|\(#10\)/.test(msg)) { posts.length = before; withComments = false; continue; }
-        warnings.push(`Facebook posts for ${pg.name}: ${msg}`); break;
+        const userContent = /pages_read_user_content|Page Public Content Access|\(#10\)/.test(msg);
+        if (!userContent || level === levels.length - 1) { warnings.push(`Facebook posts for ${pg.name}: ${msg}`); level = levels.length; break; }
       }
-      if (!withComments && posts.length > before) warnings.push(`Facebook comment counts for ${pg.name} need Meta's "Page user content" approval; reactions and shares are counted.`);
+      if (level >= 1 && level < levels.length) {
+        fbPosts.push(...posts.slice(before).filter(p => p.likes == null || p.reach == null).map(snap => ({ snap, tok, needReactions: level >= 2 })));
+        warnings.push(level === 1
+          ? `Facebook comment counts for ${pg.name} need Meta's "Page user content" approval; reactions, shares and reach are counted.`
+          : `Facebook reactions for ${pg.name} come from Page Insights; comment counts need Meta's "Page user content" approval.`);
+      }
 
       const ig = pg.instagram_business_account;
       if (!ig) continue;
@@ -158,6 +172,21 @@ const meta = {
       }
     });
     posts.push(...igPosts.map(p => p.snap));
+    // Facebook posts read without reaction counts: totals and reach from post insights (no names involved)
+    const fbSkipped = await pool(fbPosts.filter(p => !opts.fresh.has(p.snap.externalId)), 10, opts.deadline, async ({ snap, tok }) => {
+      for (const metrics of ['post_reactions_by_type_total,post_impressions_unique', 'post_reactions_by_type_total', 'post_impressions_unique']) {
+        try {
+          const ins = await getJson<{ data: { name: string; values?: { value: number | Record<string, number> }[] }[] }>(f, `${G}/${snap.externalId}/insights?metric=${metrics}&access_token=${tok}`);
+          for (const d of ins.data) {
+            const v = d.values?.[0]?.value;
+            if (d.name === 'post_reactions_by_type_total') snap.likes = typeof v === 'number' ? v : v ? Object.values(v).reduce((x, y) => x + y, 0) : 0;
+            else if (d.name === 'post_impressions_unique' && typeof v === 'number') snap.reach = v;
+          }
+          break;
+        } catch { /* try a smaller metric set */ }
+      }
+    });
+    if (fbSkipped) warnings.push(`Reactions for ${fbSkipped} older Facebook posts will be filled in on the next sync.`);
     if (skipped) warnings.push(`Reach and saves for ${skipped} older Instagram posts will be filled in on the next sync.`);
 
     // lead ads: each submitted form becomes a customer record and an inquiry journey tagged to its campaign
