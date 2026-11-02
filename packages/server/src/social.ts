@@ -276,9 +276,17 @@ const meta = {
       if (!igForDiscovery) { competitorResults.push({ ...c, error: 'Connect the brand’s own Instagram first; competitors are looked up through it.' }); continue; }
       if (Date.now() > opts.deadline + 10_000) { competitorResults.push({ ...c, error: 'Will update on the next sync.' }); continue; }
       try {
-        const fields = `business_discovery.username(${encodeURIComponent(c.handle)}){id,username,name,followers_count,media_count,media.limit(60){id,caption,like_count,comments_count,timestamp,media_type,media_product_type,permalink,media_url,thumbnail_url}}`;
-        const r = await getJson<{ business_discovery?: { id: string; username: string; name?: string; followers_count?: number; media_count?: number; media?: { data: { id: string; caption?: string; like_count?: number; comments_count?: number; timestamp: string; media_type?: string; media_product_type?: string; permalink?: string; media_url?: string; thumbnail_url?: string }[] } } }>(f,
-          `${G}/${igForDiscovery.id}?fields=${fields}&access_token=${igForDiscovery.tok}`);
+        // fewer fields on each retry: some accounts or app setups refuse picture links
+        const mediaFields = ['id,caption,like_count,comments_count,timestamp,media_type,media_product_type,permalink,media_url,thumbnail_url', 'id,caption,like_count,comments_count,timestamp,media_type,media_product_type,permalink', 'id,caption,like_count,comments_count,timestamp,media_type,permalink'];
+        type BD = { business_discovery?: { id: string; username: string; name?: string; followers_count?: number; media_count?: number; media?: { data: { id: string; caption?: string; like_count?: number; comments_count?: number; timestamp: string; media_type?: string; media_product_type?: string; permalink?: string; media_url?: string; thumbnail_url?: string }[] } } };
+        let r: BD | null = null, lastErr: Error | null = null;
+        for (const mf of mediaFields) {
+          try {
+            r = await getJson<BD>(f, `${G}/${igForDiscovery.id}?fields=${encodeURIComponent(`business_discovery.username(${c.handle}){id,username,name,followers_count,media_count,media.limit(60){${mf}}}`)}&access_token=${igForDiscovery.tok}`);
+            break;
+          } catch (e) { lastErr = e as Error; if (!/\(#100\)|field/i.test(lastErr.message)) break; }
+        }
+        if (!r) throw lastErr ?? new Error('not found');
         const b = r.business_discovery;
         if (!b) throw new Error('not found');
         accounts.push({ platform: 'instagram', externalId: b.id, handle: b.username, name: b.name || b.username, followers: b.followers_count ?? null, postsCount: b.media_count ?? null, profileUrl: `https://instagram.com/${b.username}`, isCompetitor: true, competitorHandle: c.handle });
@@ -292,7 +300,7 @@ const meta = {
         competitorResults.push({ ...c, error: null });
       } catch (e) {
         const msg = (e as Error).message;
-        competitorResults.push({ ...c, error: /not found|Invalid user id|cannot be found|does not exist|\(#110\)|\(#100\)/i.test(msg) ? `@${c.handle} was not found, or it is a personal account (only business and creator accounts can be compared).` : msg.slice(0, 200) });
+        competitorResults.push({ ...c, error: /Invalid user id|cannot be found|does not exist|\(#110\)/i.test(msg) ? `@${c.handle} was not found, or it is a personal account (only business and creator accounts can be compared).` : `Instagram did not return @${c.handle}: ${msg.replace(/https?:\/\/\S+/g, '').slice(0, 220)}` });
       }
     }
     return { accounts, posts, campaigns, leads, warnings, daily, competitors: competitorResults };
