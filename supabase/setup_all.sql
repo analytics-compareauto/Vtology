@@ -606,6 +606,28 @@ revoke all on vt.social_tokens from authenticated;
 -- Post thumbnails for the social dashboard (a picture link from the platform, refreshed on each sync)
 alter table vt.social_posts add column if not exists thumbnail_url text;
 
+-- ===== 20261103000008_growth.sql =====
+-- Growth and benchmarking: the competitors a brand tracks, and daily follower history.
+-- Competitor data is what each platform shows publicly (followers, posts, likes, comments, views).
+create table if not exists vt.social_competitors (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references vt.tenants(id) on delete cascade,
+  platform text not null check (platform in ('instagram', 'youtube', 'facebook')),
+  handle text not null,
+  account_id uuid references vt.social_accounts(id) on delete set null,
+  added_by uuid,
+  added_at timestamptz not null default now(),
+  last_error text,
+  unique (tenant_id, platform, handle)
+);
+alter table vt.social_competitors enable row level security;
+create policy social_competitors_read on vt.social_competitors for select to authenticated using (vt.sees_social(tenant_id));
+grant select on vt.social_competitors to authenticated;
+
+-- new followers per day (when the platform reports it) next to the follower total
+alter table vt.social_account_daily add column if not exists new_followers int;
+alter table vt.social_account_daily add column if not exists posts_count int;
+
 create schema if not exists vt_meta;
 create table if not exists vt_meta.schema_migrations (id text primary key, applied_at timestamptz not null default now());
-insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails') on conflict do nothing;
+insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth') on conflict do nothing;

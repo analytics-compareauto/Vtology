@@ -11,7 +11,7 @@ import { requestAction, decideAction } from './actions';
 import { signIn, refreshSession } from './auth';
 import { listWorkspaces, createWorkspace, switchSampleRole } from './workspaces';
 import { schemaReady } from './schema';
-import { startConnect, finishConnect, socialOverview, syncTenant, syncAll, disconnect } from './social';
+import { startConnect, finishConnect, socialOverview, syncTenant, syncAll, disconnect, growthOverview, addCompetitor, removeCompetitor } from './social';
 import { ROLES, type RoleCode } from '@vtology/core';
 
 const MappingSchema = z.object({
@@ -65,6 +65,18 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
     if (route === 'GET me') return json(200, await me(ctx));
     if (route === 'GET social') return json(200, await socialOverview(deps, ctx));
     if (route === 'POST social/sync') return json(200, await syncTenant(deps, ctx));
+    if (route === 'GET social/growth') {
+      const per = url.searchParams.get('period');
+      const pl = url.searchParams.get('platform');
+      return json(200, await growthOverview(deps, ctx, per === 'week' || per === 'quarter' ? per : 'month', pl && ['instagram', 'facebook', 'youtube'].includes(pl) ? pl : null));
+    }
+    if (route === 'POST social/competitors') {
+      const b = await req.json().catch(() => ({})) as { platform?: unknown; handle?: unknown };
+      if (typeof b.platform !== 'string' || typeof b.handle !== 'string') throw new HttpError(400, 'Send a platform and a handle.');
+      return json(201, await addCompetitor(deps, ctx, b.platform, b.handle));
+    }
+    const rc = route.match(/^DELETE social\/competitors\/([0-9a-f-]{36})$/);
+    if (rc) return json(200, await removeCompetitor(ctx, rc[1]!));
     const sc = route.match(/^POST social\/connect\/([a-z]+)$/);
     if (sc) return json(200, await startConnect(deps, ctx, sc[1]!));
     const sd = route.match(/^DELETE social\/([0-9a-f-]{36})$/);

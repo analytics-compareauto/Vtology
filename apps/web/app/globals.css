@@ -469,3 +469,42 @@ a.post:hover { border-color: var(--flow); }
 .funnel .gap { font-size: 12.5px; text-align: right; }
 .funnel .gap b { display: block; font-size: 16px; font-family: var(--display); }
 @media (max-width: 760px) { .funnel { grid-template-columns: 1fr; gap: 8px; } .funnel .gap { text-align: left; } }
+
+/* ---------- growth */
+.plan { list-style: none; counter-reset: plan; margin: 0; padding: 0; display: grid; }
+.plan li { counter-increment: plan; display: grid; gap: 6px; padding: 14px 0 14px 44px; border-top: 1px solid var(--line-soft); position: relative; }
+.plan li:first-child { border-top: 0; }
+.plan li::before { content: counter(plan); position: absolute; left: 0; top: 14px; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--flow-soft); color: var(--flow); font-family: var(--display); font-weight: 750; font-size: 15px; }
+.plan-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.plan-head b { font-size: 15.5px; }
+.plan p { font-size: 14px; color: var(--ink-2); max-width: 90ch; }
+table.bench tr.you td { background: color-mix(in srgb, var(--flow-soft) 60%, var(--surface)); }
+table.bench tr.you td:first-child { box-shadow: inset 3px 0 0 var(--flow); }
+.cell-bar { display: grid; grid-template-columns: 64px minmax(60px, 1fr); gap: 8px; align-items: center; min-width: 150px; }
+.cell-bar span { font-weight: 650; font-size: 13.5px; }
+.cell-bar i { display: block; height: 7px; border-radius: 4px; background: var(--flow); min-width: 2px; }
+.cell-bar i.alt { background: var(--ok); }
+.cell-bar i.sov { background: var(--signal); }
+.trends { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.trend { border: 1px solid var(--line); border-radius: var(--radius-m); padding: 12px 14px; display: grid; gap: 5px; align-content: start; background: var(--surface); }
+.trend.rising { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); background: color-mix(in srgb, var(--ok-soft) 45%, var(--surface)); }
+.trend.falling { opacity: 0.85; }
+.trend .tag { justify-self: start; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.hashtag { display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 10px; border-radius: 20px; background: var(--line-soft); font-size: 13px; font-weight: 600; }
+.hashtag em { font-style: normal; font-weight: 500; font-size: 11.5px; color: var(--muted); }
+.hashtag.good { background: var(--ok-soft); color: var(--ok); }
+.post .you-flag { position: absolute; left: 8px; top: 8px; background: var(--flow); color: #fff; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px; }
+
+/* ---------- print: the growth report as a clean PDF */
+@media print {
+  @page { size: A4; margin: 14mm; }
+  body { background: #fff; font-size: 12px; }
+  .side, .mobile-nav, .topbar, .no-print, .toast, .page-head { display: none !important; }
+  .shell { display: block; background: #fff; }
+  .page { padding: 0; max-width: none; }
+  .print-only { display: block !important; margin-bottom: 8px; }
+  .panel, .kpi, .table-wrap, .post, .pf-tile, .verdict { box-shadow: none !important; break-inside: avoid; }
+  .growth { opacity: 1 !important; }
+  a { color: inherit; text-decoration: none; }
+}

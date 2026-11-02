@@ -169,3 +169,37 @@ export function EffortMap({ points, height = 340 }: { points: EffortPoint[]; hei
     </div>
   );
 }
+
+/** Vertical bars over categories, one series; hover a bar for its value. */
+export function BarChart({ x, values, color = 'var(--flow)', height = 220, format = compact, xFormat = (s: string) => s, label = '' }: { x: string[]; values: number[]; color?: string; height?: number; format?: (n: number) => string; xFormat?: (s: string) => string; label?: string }) {
+  const [ref, w] = useWidth<HTMLDivElement>();
+  const [hover, setHover] = useState<number | null>(null);
+  const pad = { l: 40, r: 8, t: 10, b: 26 };
+  const iw = w - pad.l - pad.r, ih = height - pad.t - pad.b;
+  const max = niceMax(Math.max(1, ...values));
+  const bw = iw / Math.max(1, x.length);
+  const Y = (v: number) => pad.t + ih - (v / max) * ih;
+  const every = Math.max(1, Math.ceil(x.length / Math.max(2, Math.floor(iw / 70))));
+  return (
+    <div className="chart" ref={ref}>
+      <svg viewBox={`0 0 ${w} ${height}`} height={height} role="img" aria-label={label}>
+        {[0, 0.5, 1].map(f => (
+          <g key={f} className="axis"><line className="gridline" x1={pad.l} x2={w - pad.r} y1={Y(f * max)} y2={Y(f * max)} /><text x={pad.l - 8} y={Y(f * max) + 4} textAnchor="end">{format(f * max)}</text></g>
+        ))}
+        {values.map((v, i) => (
+          <g key={i} onPointerEnter={() => setHover(i)} onPointerLeave={() => setHover(null)}>
+            <rect x={pad.l + i * bw} y={pad.t} width={bw} height={ih} fill="transparent" />
+            <rect x={pad.l + i * bw + Math.min(6, bw * 0.15)} y={Y(v)} width={Math.max(2, bw - 2 * Math.min(6, bw * 0.15))} height={Math.max(0, pad.t + ih - Y(v))} rx={3} fill={color} opacity={hover === null || hover === i ? 1 : 0.55} />
+          </g>
+        ))}
+        {x.map((l, i) => i % every === 0 && <text key={l} className="axis" x={pad.l + i * bw + bw / 2} y={height - 8} textAnchor="middle">{xFormat(l)}</text>)}
+      </svg>
+      {hover !== null && (
+        <div className="chart-tip" style={{ left: Math.min(pad.l + hover * bw + bw, w - 160), top: 4 }}>
+          <div className="t">{xFormat(x[hover]!)}</div>
+          <div className="r"><b>{format(values[hover]!)}</b><span className="muted">{label}</span></div>
+        </div>
+      )}
+    </div>
+  );
+}

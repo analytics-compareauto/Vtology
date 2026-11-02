@@ -30,6 +30,8 @@ export interface PlatformSummary {
   platform: string; posts: number; interactions: number;
   /** Totals only over posts where the platform reports the number; null when it reports none. */
   views: number | null; reach: number | null; viewsPosts: number; reachPosts: number;
+  /** Total watch time in hours over posts where the platform reports it (reels, videos); null when none. */
+  watchHours: number | null; watchPosts: number;
   medianEngagement: number | null;
 }
 /** What the posts of one platform (or all together) say: groups compared with the account's typical post, and what to do. */
@@ -38,7 +40,7 @@ export interface SocialAnalysis {
   windowDays: number;
   posts: number;
   /** Week by week, per platform. Weeks start Monday, IST. */
-  weekly: { week: string; platform: string; posts: number; interactions: number; views: number; reach: number }[];
+  weekly: { week: string; platform: string; posts: number; interactions: number; views: number; reach: number; watchHours: number }[];
   /** Posts left out of comparisons because too few people saw them for a ratio to mean anything. */
   lowAudience: number;
   byPlatform: PlatformSummary[];
@@ -121,6 +123,11 @@ const LABELS: Record<Dimension, Record<string, string>> = {
   day: { weekday: 'Weekdays', weekend: 'Weekends' },
   length: { short: 'Short captions', medium: 'Medium captions', long: 'Long captions' },
 };
+/** Display label for a group key, e.g. ('format', 'reel') → 'Reels'. */
+export function labelOf(industry: Industry, dim: Dimension, key: string): string {
+  return dim === 'theme' ? themeLabel(industry, key) : dim === 'language' ? `Posts in ${key}` : LABELS[dim][key] ?? key;
+}
+
 export function themeLabel(industry: Industry, key: string): string {
   return THEMES[industry].find(t => t[0] === key)?.[1] ?? 'Other';
 }
@@ -255,10 +262,11 @@ export function analyzeSocial(industry: Industry, accounts: SocialAccount[], pos
     byPlatform: platforms.map(pl => {
       const ps = scored.filter(p => p.platform === pl);
       const es = ps.filter(p => p.engagement !== null).map(p => p.engagement!);
-      const withViews = ps.filter(p => typeof p.views === 'number'), withReach = ps.filter(p => typeof p.reach === 'number');
+      const withViews = ps.filter(p => typeof p.views === 'number'), withReach = ps.filter(p => typeof p.reach === 'number'), withWatch = ps.filter(p => typeof p.watchMinutes === 'number' && p.watchMinutes > 0);
       return { platform: pl, posts: ps.length, interactions: ps.reduce((s, p) => s + p.interactions, 0),
         views: withViews.length ? withViews.reduce((s, p) => s + n0(p.views), 0) : null, reach: withReach.length ? withReach.reduce((s, p) => s + n0(p.reach), 0) : null,
-        viewsPosts: withViews.length, reachPosts: withReach.length, medianEngagement: es.length ? median(es) : null };
+        viewsPosts: withViews.length, reachPosts: withReach.length,
+        watchHours: withWatch.length ? withWatch.reduce((s, p) => s + n0(p.watchMinutes), 0) / 60 : null, watchPosts: withWatch.length, medianEngagement: es.length ? median(es) : null };
     }),
     segments: all.segments, insights, top: all.top, bottom: all.bottom, perPlatform,
   };
@@ -275,8 +283,8 @@ function weeklyOf(posts: ScoredPost[]): SocialAnalysis['weekly'] {
   const m = new Map<string, SocialAnalysis['weekly'][number]>();
   for (const p of posts) {
     const week = weekOf(p.postedAt), k = `${week}|${p.platform}`;
-    const w = m.get(k) ?? { week, platform: p.platform, posts: 0, interactions: 0, views: 0, reach: 0 };
-    w.posts++; w.interactions += p.interactions; w.views += n0(p.views); w.reach += n0(p.reach);
+    const w = m.get(k) ?? { week, platform: p.platform, posts: 0, interactions: 0, views: 0, reach: 0, watchHours: 0 };
+    w.posts++; w.interactions += p.interactions; w.views += n0(p.views); w.reach += n0(p.reach); w.watchHours += n0(p.watchMinutes) / 60;
     m.set(k, w);
   }
   return [...m.values()].sort((a, b) => a.week.localeCompare(b.week) || a.platform.localeCompare(b.platform));

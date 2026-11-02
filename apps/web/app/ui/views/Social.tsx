@@ -17,7 +17,7 @@ interface Overview {
   connections: Connection[]; accounts: Account[]; campaigns: Campaign[];
   analysis: {
     windowDays: number; posts: number; lowAudience?: number;
-    weekly?: { week: string; platform: string; posts: number; interactions: number; views: number; reach: number }[];
+    weekly?: { week: string; platform: string; posts: number; interactions: number; views: number; reach: number; watchHours?: number }[];
     byPlatform: PlatformSummary[];
     segments: Segment[]; insights: Insight[]; top: Post[]; bottom: Post[];
     perPlatform?: Record<string, SocialView>;
@@ -41,12 +41,13 @@ const METRICS = [
   { id: 'interactions', label: 'Interactions', noun: 'interactions' },
   { id: 'views', label: 'Views', noun: 'views' },
   { id: 'reach', label: 'Reach', noun: 'reach' },
+  { id: 'watchHours', label: 'Hours watched', noun: 'hours watched' },
   { id: 'posts', label: 'Posts', noun: 'posts' },
 ] as const;
 /** What each platform reports, so a missing number is explained rather than shown as zero. */
-const NOT_REPORTED: Record<string, { views?: string; reach?: string }> = {
-  facebook: { views: 'Facebook reports reach for Page posts, not views' },
-  youtube: { reach: 'YouTube reach needs the YouTube Analytics connection' },
+const NOT_REPORTED: Record<string, { views?: string; reach?: string; watchHours?: string }> = {
+  facebook: { watchHours: 'Facebook reports watch time for native videos only' },
+  youtube: { reach: 'YouTube reach needs the YouTube Analytics connection', watchHours: 'YouTube watch time needs the YouTube Analytics connection' },
   instagram: {},
 };
 type Metric = typeof METRICS[number]['id'];
@@ -115,7 +116,7 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
     // the last 26 complete-or-current weeks, gaps filled with zero
     const end = mondayOf(new Date());
     const weeks = Array.from({ length: 26 }, (_, i) => new Date(end.getTime() - (25 - i) * 7 * 86_400_000).toISOString().slice(0, 10));
-    const val = (p: string, w: string, m: Metric) => { const r = weekly.find(x => x.platform === p && x.week === w); return r ? r[m] : 0; };
+    const val = (p: string, w: string, m: Metric) => { const r = weekly.find(x => x.platform === p && x.week === w); return r ? r[m] ?? 0 : 0; };
     const series = (m: Metric) => platforms.map(p => ({ key: p, label: PLATFORM[p]!, color: COLOR[p]!, values: weeks.map(w => val(p, w, m)) }));
     const last4 = (vals: number[]) => sum(vals.slice(-4)), prev4 = (vals: number[]) => sum(vals.slice(-8, -4));
     const view: SocialView = only !== 'all' && a.perPlatform?.[only] ? a.perPlatform[only]! : { platform: null, rated: 0, segments: a.segments, insights: a.insights, top: a.top, bottom: a.bottom };
@@ -130,10 +131,10 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
   const { a, present, platforms, weeks, series, last4, prev4, view } = derived;
   const plName = only === 'all' ? null : PLATFORM[only]!;
   const scopeSummaries = a.byPlatform.filter(b => platforms.includes(b.platform));
-  const sumOrNull = (k: 'views' | 'reach') => { const xs = scopeSummaries.map(b => b[k]).filter((x): x is number => x !== null); return xs.length ? sum(xs) : null; };
-  const viewsAll = sumOrNull('views'), reachAll = sumOrNull('reach');
+  const sumOrNull = (k: 'views' | 'reach' | 'watchHours') => { const xs = scopeSummaries.map(b => b[k]).filter((x): x is number => x !== null); return xs.length ? sum(xs) : null; };
+  const viewsAll = sumOrNull('views'), reachAll = sumOrNull('reach'), watchAll = sumOrNull('watchHours');
   const postsScope = sum(scopeSummaries.map(b => b.posts));
-  const metricsHere = METRICS.filter(m => m.id === 'interactions' || m.id === 'posts' || (m.id === 'views' ? viewsAll !== null : reachAll !== null));
+  const metricsHere = METRICS.filter(m => m.id === 'interactions' || m.id === 'posts' || (m.id === 'views' ? viewsAll !== null : m.id === 'reach' ? reachAll !== null : watchAll !== null));
   const real = o.connections.filter(c => c.provider !== 'sample');
   const sample = o.connections.find(c => c.provider === 'sample');
   const lastSync = real.map(c => c.last_sync_at).filter(Boolean).sort().pop();
@@ -221,8 +222,9 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
           <section className="kpis" aria-label="Headline numbers" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
             <div className="kpi"><span className="label">Followers</span><span className="value">{compact(followers)}</span><span className="sub">{plName ?? `across ${o.accounts.length} accounts`}</span></div>
             <div className="kpi"><span className="label">Posts</span><span className="value">{num(postsScope)}</span><span className="sub">{(postsScope / (a.windowDays / 7)).toFixed(1)} a week</span></div>
-            <div className="kpi"><span className="label">Views</span><span className="value">{viewsAll === null ? '—' : compact(viewsAll)}</span><span className="sub">{viewsAll === null ? (plName ? NOT_REPORTED[only]?.views ?? 'not reported' : 'not reported') : `times your posts were played or shown${scopeSummaries.some(b => b.views === null) ? `, ${scopeSummaries.filter(b => b.views !== null).map(b => PLATFORM[b.platform]).join(' and ')} only` : ''}`}</span></div>
+            <div className="kpi"><span className="label">Views (impressions)</span><span className="value">{viewsAll === null ? '—' : compact(viewsAll)}</span><span className="sub">{viewsAll === null ? (plName ? NOT_REPORTED[only]?.views ?? 'not reported' : 'not reported') : `times your posts were played or shown${scopeSummaries.some(b => b.views === null) ? `, ${scopeSummaries.filter(b => b.views !== null).map(b => PLATFORM[b.platform]).join(' and ')} only` : ''}`}</span></div>
             <div className="kpi"><span className="label">Reach</span><span className="value">{reachAll === null ? '—' : compact(reachAll)}</span><span className="sub">{reachAll === null ? (plName ? NOT_REPORTED[only]?.reach ?? 'not reported' : 'not reported') : `people who saw a post, added up per post${scopeSummaries.some(b => b.reach === null) ? `; ${scopeSummaries.filter(b => b.reach !== null).map(b => PLATFORM[b.platform]).join(' and ')} only` : ''}`}</span></div>
+            <div className="kpi"><span className="label">Hours watched</span><span className="value">{watchAll === null ? '—' : watchAll >= 10 ? compact(Math.round(watchAll)) : watchAll.toFixed(1)}</span><span className="sub">{watchAll === null ? (plName ? NOT_REPORTED[only]?.watchHours ?? 'not reported' : 'reels and videos; YouTube needs Analytics') : `on reels and videos${scopeSummaries.some(b => b.watchHours === null) ? `, ${scopeSummaries.filter(b => b.watchHours !== null).map(b => PLATFORM[b.platform]).join(' and ')} only` : ''}`}</span></div>
             <div className="kpi"><span className="label">Interactions, last 4 weeks</span><span className="value">{compact(iNow)}</span>
               <span className="sub"><b style={{ color: iNow >= iBefore ? 'var(--ok)' : 'var(--leak)' }}>{change(iNow, iBefore)}</b> vs the 4 weeks before ({compact(iBefore)})</span></div>
           </section>
@@ -274,7 +276,7 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
             </div>
             <div className="legend" style={{ marginBottom: 8 }}>{trend.map(s => <span key={s.key}><i className="line" style={{ background: s.color }} />{s.label}</span>)}</div>
             <LineChart x={weeks} series={trend} xFormat={weekLabel} />
-            {(m0 === 'views' || m0 === 'reach') && platforms.some(p => a.byPlatform.find(b => b.platform === p)?.[m0] === null) && (
+            {(m0 === 'views' || m0 === 'reach' || m0 === 'watchHours') && platforms.some(p => a.byPlatform.find(b => b.platform === p)?.[m0] === null) && (
               <p className="muted small" style={{ marginTop: 8 }}>{platforms.filter(p => a.byPlatform.find(b => b.platform === p)?.[m0] === null).map(p => NOT_REPORTED[p]?.[m0]).filter(Boolean).join('. ')}.</p>
             )}
           </section>

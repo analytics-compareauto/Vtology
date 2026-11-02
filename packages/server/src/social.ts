@@ -10,7 +10,7 @@
  * Only brand-level data is stored: the brand's own accounts, posts and aggregate metrics. Comments
  * are counted, never stored, and nothing about individual followers is collected.
  */
-import { analyzeSocial, hashValue, normalizeEmail, normalizePhone, type Industry, type SocialAccount, type SocialPost } from '@vtology/core';
+import { analyzeSocial, growthReport, hashValue, normalizeEmail, normalizePhone, type GAccount, type GDaily, type GPost, type Industry, type Period, type SocialAccount, type SocialPost } from '@vtology/core';
 import { loadContext } from './context';
 import { runPipeline } from './pipeline';
 import { HttpError, requireRole, type Ctx, type Deps } from './context';
@@ -25,12 +25,21 @@ export interface SocialConfig {
 }
 
 interface Tokens { accessToken: string; refreshToken?: string | null; expiresAt?: Date | null; extra?: Record<string, string> | null }
-interface AccountSnap { platform: SocialPost['platform']; externalId: string; handle?: string | null; name: string; followers?: number | null; postsCount?: number | null; profileUrl?: string | null }
+interface AccountSnap { platform: SocialPost['platform']; externalId: string; handle?: string | null; name: string; followers?: number | null; postsCount?: number | null; profileUrl?: string | null; isCompetitor?: boolean; competitorHandle?: string }
 interface PostSnap { platform: SocialPost['platform']; accountExternalId: string; externalId: string; postedAt: string; format: string; caption?: string | null; permalink?: string | null; thumbnailUrl?: string | null; durationS?: number | null;
   views?: number | null; reach?: number | null; likes?: number | null; comments?: number | null; shares?: number | null; saves?: number | null; watchMinutes?: number | null; avgViewPct?: number | null }
 interface CampaignSnap { externalCode: string; name: string; channel: string; startDate?: string | null; endDate?: string | null; spendInr: number; conversions: number }
 interface LeadSnap { externalId: string; createdAt: string; name: string | null; phone: string | null; email: string | null; city: string | null; pincode: string | null; campaignId: string | null; campaignName: string | null; formName: string; pageName: string }
-interface SyncResult { accounts: AccountSnap[]; posts: PostSnap[]; campaigns: CampaignSnap[]; leads?: LeadSnap[]; warnings: string[]; tokens?: Tokens }
+interface DailySnap { platform: SocialPost['platform']; accountExternalId: string; day: string; newFollowers: number }
+interface CompetitorResult { platform: string; handle: string; error: string | null }
+interface SyncOpts { fresh: Set<string>; deadline: number; competitors: { platform: string; handle: string }[] }
+interface SyncResult { accounts: AccountSnap[]; posts: PostSnap[]; campaigns: CampaignSnap[]; leads?: LeadSnap[]; warnings: string[]; tokens?: Tokens; daily?: DailySnap[]; competitors?: CompetitorResult[] }
+/** "@CarDekho", "instagram.com/cardekho/", "youtube.com/@CarDekho" → "cardekho" (lower case for Instagram). */
+export function cleanHandle(platform: string, raw: string): string {
+  let h = raw.trim().replace(/^https?:\/\/(www\.)?/i, '').replace(/^(instagram\.com|youtube\.com|m\.youtube\.com|facebook\.com)\//i, '').replace(/[/?#].*$/, '').replace(/^@/, '');
+  if (platform === 'instagram') h = h.toLowerCase();
+  return h;
+}
 
 const redirect = (cfg: SocialConfig, p: ProviderId) => `${cfg.publicUrl.replace(/\/$/, '')}/api/social/callback/${p}`;
 
@@ -84,8 +93,10 @@ const meta = {
       tokens: { accessToken: long.access_token, expiresAt: long.expires_in ? new Date(Date.now() + long.expires_in * 1000) : null } as Tokens,
     };
   },
-  async sync(cfg: SocialConfig, f: typeof fetch, t: Tokens, since: Date, opts: { fresh: Set<string>; deadline: number }): Promise<SyncResult> {
+  async sync(cfg: SocialConfig, f: typeof fetch, t: Tokens, since: Date, opts: SyncOpts): Promise<SyncResult> {
     const G = meta.graph(cfg), warnings: string[] = [];
+    const daily: DailySnap[] = [], competitorResults: CompetitorResult[] = [];
+    let igForDiscovery: { id: string; tok: string } | null = null;
     const accounts: AccountSnap[] = [], posts: PostSnap[] = [], campaigns: CampaignSnap[] = [];
     const sinceUnix = Math.floor(since.getTime() / 1000);
     const pages = await getJson<{ data: { id: string; name: string; username?: string; link?: string; followers_count?: number; fan_count?: number; access_token: string;
@@ -98,6 +109,16 @@ const meta = {
     for (const pg of pages.data) {
       const tok = encodeURIComponent(pg.access_token);
       accounts.push({ platform: 'facebook', externalId: pg.id, handle: pg.username ?? null, name: pg.name, followers: pg.followers_count ?? pg.fan_count ?? null, profileUrl: pg.link ?? `https://facebook.com/${pg.id}` });
+      for (const metric of ['page_daily_follows_unique', 'page_follows']) {
+        try {
+          const until = Math.floor(Date.now() / 1000), from30 = until - 29 * 86_400;
+          const fc = await getJson<{ data: { name: string; values?: { value: number; end_time: string }[] }[] }>(f, `${G}/${pg.id}/insights?metric=${metric}&period=day&since=${from30}&until=${until}&access_token=${tok}`);
+          const vals = fc.data[0]?.values ?? [];
+          if (metric === 'page_daily_follows_unique') for (const v of vals) daily.push({ platform: 'facebook', accountExternalId: pg.id, day: v.end_time.slice(0, 10), newFollowers: v.value });
+          else for (let i = 1; i < vals.length; i++) daily.push({ platform: 'facebook', accountExternalId: pg.id, day: vals[i]!.end_time.slice(0, 10), newFollowers: Math.max(0, vals[i]!.value - vals[i - 1]!.value) });
+          if (vals.length) break;
+        } catch { /* try the next metric */ }
+      }
       // Reaction and comment lists name the people who reacted, so Meta treats them as "user content" that
       // needs extra review. Ask for the richest view first, then step down to the bare posts, and read
       // reaction totals and reach from Page Insights instead (read_insights, which carries no names).
@@ -139,6 +160,13 @@ const meta = {
       const ig = pg.instagram_business_account;
       if (!ig) continue;
       accounts.push({ platform: 'instagram', externalId: ig.id, handle: ig.username ?? null, name: ig.name ?? ig.username ?? pg.name, followers: ig.followers_count ?? null, postsCount: ig.media_count ?? null, profileUrl: ig.username ? `https://instagram.com/${ig.username}` : null });
+      igForDiscovery ??= { id: ig.id, tok };
+      // new followers per day for the last 30 days (Instagram keeps 30 days of this)
+      try {
+        const until = Math.floor(Date.now() / 1000), from30 = until - 29 * 86_400;
+        const fc = await getJson<{ data: { name: string; values?: { value: number; end_time: string }[] }[] }>(f, `${G}/${ig.id}/insights?metric=follower_count&period=day&since=${from30}&until=${until}&access_token=${tok}`);
+        for (const v of fc.data.find(d => d.name === 'follower_count')?.values ?? []) daily.push({ platform: 'instagram', accountExternalId: ig.id, day: v.end_time.slice(0, 10), newFollowers: v.value });
+      } catch { /* not available for accounts under 100 followers */ }
       try {
         let url: string | null = `${G}/${ig.id}/media?fields=id,caption,media_type,media_product_type,permalink,timestamp,like_count,comments_count,media_url,thumbnail_url&limit=100&access_token=${tok}`;
         let done = false;
@@ -160,12 +188,15 @@ const meta = {
     // The available metrics differ by post type and change over time, so fall back gracefully.
     const needInsights = igPosts.filter(p => !opts.fresh.has(p.snap.externalId));
     const skipped = await pool(needInsights, 10, opts.deadline, async ({ snap, tok }) => {
-      for (const metrics of ['reach,saved,shares,views', 'reach,saved,shares', 'reach']) {
+      const sets = snap.format === 'reel' ? ['reach,saved,shares,views,ig_reels_video_view_total_time,ig_reels_avg_watch_time', 'reach,saved,shares,views,ig_reels_video_view_total_time', 'reach,saved,shares,views', 'reach,saved,shares', 'reach'] : ['reach,saved,shares,views', 'reach,saved,shares', 'reach'];
+      for (const metrics of sets) {
         try {
           const ins = await getJson<{ data: { name: string; values?: { value: number }[]; total_value?: { value: number } }[] }>(f, `${G}/${snap.externalId}/insights?metric=${metrics}&access_token=${tok}`);
           for (const d of ins.data) {
             const v = d.values?.[0]?.value ?? d.total_value?.value ?? null;
             if (d.name === 'reach') snap.reach = v; else if (d.name === 'saved') snap.saves = v; else if (d.name === 'shares') snap.shares = v; else if (d.name === 'views') snap.views = v;
+            else if (d.name === 'ig_reels_video_view_total_time' && v !== null) snap.watchMinutes = v / 60_000;
+            else if (d.name === 'ig_reels_avg_watch_time' && v !== null && snap.durationS) snap.avgViewPct = Math.min(100, (v / 1000 / snap.durationS) * 100);
           }
           break;
         } catch { /* try a smaller metric set */ }
@@ -175,17 +206,28 @@ const meta = {
     // Facebook posts read without reaction counts: totals and reach from post insights (no names involved)
     const fbSkipped = await pool(fbPosts.filter(p => !opts.fresh.has(p.snap.externalId)), 10, opts.deadline, async ({ snap, tok }) => {
       // Meta replaced post_impressions_unique with post_total_media_view_unique; ask for the new one first
-      for (const metrics of ['post_reactions_by_type_total,post_total_media_view_unique', 'post_reactions_by_type_total,post_impressions_unique', 'post_reactions_by_type_total', 'post_total_media_view_unique', 'post_impressions_unique']) {
+      for (const metrics of ['post_reactions_by_type_total,post_total_media_view_unique,post_media_view', 'post_reactions_by_type_total,post_total_media_view_unique', 'post_reactions_by_type_total,post_impressions_unique', 'post_reactions_by_type_total', 'post_total_media_view_unique', 'post_impressions_unique']) {
         try {
           const ins = await getJson<{ data: { name: string; values?: { value: number | Record<string, number> }[] }[] }>(f, `${G}/${snap.externalId}/insights?metric=${metrics}&access_token=${tok}`);
           for (const d of ins.data) {
             const v = d.values?.[0]?.value;
             if (d.name === 'post_reactions_by_type_total') snap.likes = typeof v === 'number' ? v : v ? Object.values(v).reduce((x, y) => x + y, 0) : 0;
             else if ((d.name === 'post_total_media_view_unique' || d.name === 'post_impressions_unique') && typeof v === 'number' && v > 0) snap.reach = v;
+            // views replaced impressions in 2025: every time the post was shown, repeats included
+            else if (d.name === 'post_media_view' && typeof v === 'number' && v > 0) snap.views = v;
           }
           break;
         } catch { /* try a smaller metric set */ }
       }
+      // video watch time (milliseconds, lifetime) and video views
+      if (snap.format === 'video') try {
+        const ins = await getJson<{ data: { name: string; values?: { value: number }[] }[] }>(f, `${G}/${snap.externalId}/insights?metric=post_video_view_time,post_video_views&access_token=${tok}`);
+        for (const d of ins.data) {
+          const v = d.values?.[0]?.value;
+          if (typeof v !== 'number') continue;
+          if (d.name === 'post_video_view_time') snap.watchMinutes = v / 60_000; else if (d.name === 'post_video_views' && !snap.views) snap.views = v;
+        }
+      } catch { /* not a native video */ }
     });
     if (fbSkipped) warnings.push(`Reactions for ${fbSkipped} older Facebook posts will be filled in on the next sync.`);
     if (skipped) warnings.push(`Reach and saves for ${skipped} older Instagram posts will be filled in on the next sync.`);
@@ -228,7 +270,32 @@ const meta = {
         }
       }
     } catch (e) { warnings.push(`Meta ads: ${(e as Error).message}`); }
-    return { accounts, posts, campaigns, leads, warnings };
+    // competitors on Instagram: Meta's Business Discovery returns any public business or creator
+    // account's followers and recent posts (likes and comments), through the brand's own access
+    for (const c of opts.competitors.filter(x => x.platform === 'instagram')) {
+      if (!igForDiscovery) { competitorResults.push({ ...c, error: 'Connect the brand’s own Instagram first; competitors are looked up through it.' }); continue; }
+      if (Date.now() > opts.deadline + 10_000) { competitorResults.push({ ...c, error: 'Will update on the next sync.' }); continue; }
+      try {
+        const fields = `business_discovery.username(${encodeURIComponent(c.handle)}){id,username,name,followers_count,media_count,media.limit(60){id,caption,like_count,comments_count,timestamp,media_type,media_product_type,permalink,media_url,thumbnail_url}}`;
+        const r = await getJson<{ business_discovery?: { id: string; username: string; name?: string; followers_count?: number; media_count?: number; media?: { data: { id: string; caption?: string; like_count?: number; comments_count?: number; timestamp: string; media_type?: string; media_product_type?: string; permalink?: string; media_url?: string; thumbnail_url?: string }[] } } }>(f,
+          `${G}/${igForDiscovery.id}?fields=${fields}&access_token=${igForDiscovery.tok}`);
+        const b = r.business_discovery;
+        if (!b) throw new Error('not found');
+        accounts.push({ platform: 'instagram', externalId: b.id, handle: b.username, name: b.name || b.username, followers: b.followers_count ?? null, postsCount: b.media_count ?? null, profileUrl: `https://instagram.com/${b.username}`, isCompetitor: true, competitorHandle: c.handle });
+        for (const m of b.media?.data ?? []) {
+          if (new Date(m.timestamp) < since) continue;
+          posts.push({ platform: 'instagram', accountExternalId: b.id, externalId: m.id, postedAt: m.timestamp, caption: m.caption ?? null, permalink: m.permalink ?? null,
+            thumbnailUrl: m.thumbnail_url ?? (m.media_type === 'VIDEO' ? null : m.media_url ?? null),
+            format: m.media_product_type === 'REELS' ? 'reel' : m.media_type === 'CAROUSEL_ALBUM' ? 'carousel' : m.media_type === 'VIDEO' ? 'video' : 'image',
+            likes: m.like_count ?? null, comments: m.comments_count ?? null });
+        }
+        competitorResults.push({ ...c, error: null });
+      } catch (e) {
+        const msg = (e as Error).message;
+        competitorResults.push({ ...c, error: /not found|Invalid user id|cannot be found|does not exist|\(#110\)|\(#100\)/i.test(msg) ? `@${c.handle} was not found, or it is a personal account (only business and creator accounts can be compared).` : msg.slice(0, 200) });
+      }
+    }
+    return { accounts, posts, campaigns, leads, warnings, daily, competitors: competitorResults };
   },
 };
 
@@ -255,7 +322,7 @@ const youtube = {
       tokens: { accessToken: t.access_token, refreshToken: t.refresh_token ?? null, expiresAt: new Date(Date.now() + (t.expires_in ?? 3600) * 1000) } as Tokens,
     };
   },
-  async sync(cfg: SocialConfig, f: typeof fetch, t0: Tokens, since: Date, now: Date): Promise<SyncResult> {
+  async sync(cfg: SocialConfig, f: typeof fetch, t0: Tokens, since: Date, now: Date, competitors: { platform: string; handle: string }[] = []): Promise<SyncResult> {
     let t = t0, refreshed: Tokens | undefined;
     if (t.refreshToken && (!t.expiresAt || t.expiresAt.getTime() - 60_000 < Date.now())) {
       const r = await youtube.token(cfg, f, { refresh_token: t.refreshToken, grant_type: 'refresh_token' });
@@ -298,7 +365,35 @@ const youtube = {
       }
     }
     if (!accounts.length) warnings.push('This Google account has no YouTube channel. Reconnect with the account that owns the brand’s channel.');
-    return { accounts, posts, campaigns: [], warnings, tokens: refreshed };
+    // competitors on YouTube: public channel and video statistics
+    const competitorResults: CompetitorResult[] = [];
+    for (const c of competitors) {
+      try {
+        const q = /^UC[\w-]{20,}$/.test(c.handle) ? `id=${c.handle}` : `forHandle=${encodeURIComponent('@' + c.handle.replace(/^@/, ''))}`;
+        const cc = await getJson<{ items?: { id: string; snippet: { title: string; customUrl?: string }; statistics?: { subscriberCount?: string; videoCount?: string; hiddenSubscriberCount?: boolean }; contentDetails?: { relatedPlaylists?: { uploads?: string } } }[] }>(f,
+          `${Y}/channels?part=snippet,statistics,contentDetails&${q}`, auth);
+        const x = cc.items?.[0];
+        if (!x) throw new Error(`@${c.handle} was not found on YouTube.`);
+        accounts.push({ platform: 'youtube', externalId: x.id, handle: x.snippet.customUrl ?? c.handle, name: x.snippet.title, followers: x.statistics?.hiddenSubscriberCount ? null : Number(x.statistics?.subscriberCount ?? 0), postsCount: Number(x.statistics?.videoCount ?? 0), profileUrl: `https://youtube.com/channel/${x.id}`, isCompetitor: true, competitorHandle: c.handle });
+        const uploads = x.contentDetails?.relatedPlaylists?.uploads;
+        if (uploads) {
+          const pl = await getJson<{ items: { contentDetails: { videoId: string; videoPublishedAt?: string } }[] }>(f, `${Y}/playlistItems?part=contentDetails&maxResults=50&playlistId=${uploads}`, auth);
+          const ids = pl.items.filter(it => !it.contentDetails.videoPublishedAt || new Date(it.contentDetails.videoPublishedAt) >= since).map(it => it.contentDetails.videoId);
+          if (ids.length) {
+            const vs = await getJson<{ items: { id: string; snippet: { publishedAt: string; title: string; thumbnails?: Record<string, { url: string }> }; statistics?: { viewCount?: string; likeCount?: string; commentCount?: string }; contentDetails?: { duration?: string } }[] }>(f,
+              `${Y}/videos?part=snippet,statistics,contentDetails&id=${ids.join(',')}`, auth);
+            for (const v of vs.items) {
+              const secs = isoSeconds(v.contentDetails?.duration);
+              posts.push({ platform: 'youtube', accountExternalId: x.id, externalId: v.id, postedAt: v.snippet.publishedAt, caption: v.snippet.title, permalink: `https://youtube.com/watch?v=${v.id}`,
+                thumbnailUrl: (v.snippet.thumbnails?.medium ?? v.snippet.thumbnails?.default)?.url ?? null, durationS: secs, format: secs !== null && secs <= 60 ? 'short' : 'video',
+                views: Number(v.statistics?.viewCount ?? 0), likes: Number(v.statistics?.likeCount ?? 0), comments: Number(v.statistics?.commentCount ?? 0) });
+            }
+          }
+        }
+        competitorResults.push({ ...c, error: null });
+      } catch (e) { competitorResults.push({ ...c, error: (e as Error).message.slice(0, 200) }); }
+    }
+    return { accounts, posts, campaigns: [], warnings, tokens: refreshed, competitors: competitorResults };
   },
 };
 
@@ -367,7 +462,9 @@ export async function syncConnection(deps: Deps, tenantId: string, connectionId:
       `select p.external_id from vt.social_posts p join vt.social_accounts a on a.id = p.account_id
         where p.tenant_id = $1 and a.connection_id = $2 and p.reach is not null and p.metrics_at > now() - interval '20 hours'`, [tenantId, connectionId])).map(x => x.external_id));
     const deadline = Date.now() + (deps.syncBudgetMs ?? 35_000);
-    r = c.provider === 'meta' ? await meta.sync(deps.social!, f, tokens, since, { fresh, deadline }) : await youtube.sync(deps.social!, f, tokens, since, now);
+    const competitors = await deps.db.admin.query<{ platform: string; handle: string }>(`select platform, handle from vt.social_competitors where tenant_id = $1 and platform = any($2) order by added_at`,
+      [tenantId, c.provider === 'meta' ? ['instagram', 'facebook'] : ['youtube']]);
+    r = c.provider === 'meta' ? await meta.sync(deps.social!, f, tokens, since, { fresh, deadline, competitors }) : await youtube.sync(deps.social!, f, tokens, since, now, competitors);
   } catch (e) {
     const expired = e instanceof PlatformError && e.expired;
     await deps.db.admin.query(`update vt.social_connections set status = $3, last_error = $4 where id = $1 and tenant_id = $2`, [connectionId, tenantId, expired ? 'expired' : 'error', (e as Error).message.slice(0, 500)]);
@@ -379,15 +476,23 @@ export async function syncConnection(deps: Deps, tenantId: string, connectionId:
     const idOf = new Map<string, string>();
     for (const a of r.accounts) {
       const [row] = await sql.query<{ id: string }>(
-        `insert into vt.social_accounts (tenant_id, connection_id, platform, external_id, handle, name, followers, posts_count, profile_url, updated_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+        `insert into vt.social_accounts (tenant_id, connection_id, platform, external_id, handle, name, followers, posts_count, profile_url, is_competitor, updated_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
          on conflict (tenant_id, platform, external_id) do update set connection_id = excluded.connection_id, handle = excluded.handle, name = excluded.name,
-           followers = excluded.followers, posts_count = excluded.posts_count, profile_url = excluded.profile_url, updated_at = now()
-         returning id`, [tenantId, connectionId, a.platform, a.externalId, a.handle ?? null, a.name, a.followers ?? null, a.postsCount ?? null, a.profileUrl ?? null]);
+           followers = excluded.followers, posts_count = excluded.posts_count, profile_url = excluded.profile_url, is_competitor = excluded.is_competitor, updated_at = now()
+         returning id`, [tenantId, connectionId, a.platform, a.externalId, a.handle ?? null, a.name, a.followers ?? null, a.postsCount ?? null, a.profileUrl ?? null, !!a.isCompetitor]);
       idOf.set(`${a.platform}:${a.externalId}`, row!.id);
       if (a.followers !== null && a.followers !== undefined) await sql.query(
-        `insert into vt.social_account_daily (account_id, tenant_id, day, followers) values ($1,$2,$3,$4) on conflict (account_id, day) do update set followers = excluded.followers`,
-        [row!.id, tenantId, now.toISOString().slice(0, 10), a.followers]);
+        `insert into vt.social_account_daily (account_id, tenant_id, day, followers, posts_count) values ($1,$2,$3,$4,$5) on conflict (account_id, day) do update set followers = excluded.followers, posts_count = excluded.posts_count`,
+        [row!.id, tenantId, now.toISOString().slice(0, 10), a.followers, a.postsCount ?? null]);
+      if (a.competitorHandle) await sql.query(`update vt.social_competitors set account_id = $3, last_error = null where tenant_id = $1 and platform = $2 and handle = $4`, [tenantId, a.platform, row!.id, a.competitorHandle]);
+    }
+    for (const cr of r.competitors ?? []) if (cr.error) await sql.query(`update vt.social_competitors set last_error = $4 where tenant_id = $1 and platform = $2 and handle = $3`, [tenantId, cr.platform, cr.handle, cr.error]);
+    for (const d of r.daily ?? []) {
+      const accountId = idOf.get(`${d.platform}:${d.accountExternalId}`);
+      if (accountId) await sql.query(
+        `insert into vt.social_account_daily (account_id, tenant_id, day, new_followers) values ($1,$2,$3,$4) on conflict (account_id, day) do update set new_followers = excluded.new_followers`,
+        [accountId, tenantId, d.day, d.newFollowers]);
     }
     for (const p of r.posts) {
       const accountId = idOf.get(`${p.platform}:${p.accountExternalId}`);
@@ -482,10 +587,10 @@ export async function socialOverview(deps: Deps, ctx: Ctx) {
     const connections = await sql.query<{ id: string; provider: string; label: string; status: string; scopes: string[]; connected_at: string; last_sync_at: string | null; last_error: string | null }>(
       `select id, provider, label, status, scopes, connected_at, last_sync_at, last_error from vt.social_connections where tenant_id = $1 order by provider`, [ctx.tenantId]);
     const accountsRaw = await sql.query<{ id: string; platform: SocialPost['platform']; name: string; handle: string | null; followers: number | null; posts_count: number | null; profile_url: string | null; is_competitor: boolean }>(
-      `select id, platform, name, handle, followers, posts_count, profile_url, is_competitor from vt.social_accounts where tenant_id = $1 order by platform, name`, [ctx.tenantId]);
+      `select id, platform, name, handle, followers, posts_count, profile_url, is_competitor from vt.social_accounts where tenant_id = $1 and not is_competitor order by platform, name`, [ctx.tenantId]);
     const postsRaw = await sql.query<{ id: string; account_id: string; posted_at: string; format: string; caption: string | null; permalink: string | null; views: string | null; reach: string | null; likes: string | null; comments: string | null; shares: string | null; saves: string | null; watch_minutes: string | null; avg_view_pct: string | null; thumbnail_url: string | null }>(
       `select id, account_id, posted_at, format, caption, permalink, thumbnail_url, views, reach, likes, comments, shares, saves, watch_minutes, avg_view_pct
-         from vt.social_posts where tenant_id = $1 and posted_at > now() - interval '200 days' order by posted_at desc limit 2000`, [ctx.tenantId]);
+         from vt.social_posts where tenant_id = $1 and posted_at > now() - interval '200 days' and account_id in (select id from vt.social_accounts where tenant_id = $1 and not is_competitor) order by posted_at desc limit 2000`, [ctx.tenantId]);
     const num = (x: string | null) => (x === null ? null : Number(x));
     const platformOf = new Map(accountsRaw.map(a => [a.id, a.platform]));
     const accounts: SocialAccount[] = accountsRaw.map(a => ({ id: a.id, platform: a.platform, name: a.name, handle: a.handle, followers: a.followers }));
@@ -499,4 +604,57 @@ export async function socialOverview(deps: Deps, ctx: Ctx) {
       campaigns: campaigns.map(c => ({ ...c, spend: seesMoney ? Number(c.spend) : null })),
     };
   });
+}
+
+// ===================================================================== growth and competitors
+const EDITORS: Ctx['role'][] = ['marketing_head', 'data_steward'];
+
+export async function growthOverview(deps: Deps, ctx: Ctx, period: Period, platform: string | null) {
+  if (['partner_user', 'relationship_manager'].includes(ctx.role)) throw new HttpError(403, 'Social insights are not part of your role’s view.');
+  return ctx.db.asUser(ctx.userId, async sql => {
+    const accountsRaw = await sql.query<{ id: string; platform: string; name: string; handle: string | null; followers: number | null; is_competitor: boolean; profile_url: string | null }>(
+      `select id, platform, name, handle, followers, is_competitor, profile_url from vt.social_accounts where tenant_id = $1 order by is_competitor, platform, name`, [ctx.tenantId]);
+    const postsRaw = await sql.query<{ id: string; account_id: string; posted_at: string; format: string; caption: string | null; permalink: string | null; thumbnail_url: string | null; likes: string | null; comments: string | null; shares: string | null; saves: string | null; views: string | null; reach: string | null; watch_minutes: string | null }>(
+      `select id, account_id, posted_at, format, caption, permalink, thumbnail_url, likes, comments, shares, saves, views, reach, watch_minutes from vt.social_posts
+        where tenant_id = $1 and posted_at > now() - interval '200 days' order by posted_at desc limit 6000`, [ctx.tenantId]);
+    const dailyRaw = await sql.query<{ account_id: string; day: string; followers: number | null; new_followers: number | null }>(
+      `select account_id, day::text as day, followers, new_followers from vt.social_account_daily where tenant_id = $1 and day > current_date - 200 order by day`, [ctx.tenantId]);
+    const competitors = await sql.query<{ id: string; platform: string; handle: string; account_id: string | null; last_error: string | null; added_at: string }>(
+      `select id, platform, handle, account_id, last_error, added_at from vt.social_competitors where tenant_id = $1 order by platform, added_at`, [ctx.tenantId]);
+    const connections = await sql.query<{ provider: string; status: string }>(`select provider, status from vt.social_connections where tenant_id = $1`, [ctx.tenantId]);
+    const n = (x: string | null) => (x === null ? null : Number(x));
+    const plOf = new Map(accountsRaw.map(a => [a.id, a.platform]));
+    const accounts: GAccount[] = accountsRaw.map(a => ({ id: a.id, platform: a.platform, name: a.name, handle: a.handle, followers: a.followers, isCompetitor: a.is_competitor, profileUrl: a.profile_url }));
+    const posts: GPost[] = postsRaw.map(p => ({ id: p.id, accountId: p.account_id, platform: plOf.get(p.account_id)!, postedAt: new Date(p.posted_at), format: p.format, caption: p.caption, permalink: p.permalink, thumbnailUrl: p.thumbnail_url,
+      likes: n(p.likes), comments: n(p.comments), shares: n(p.shares), saves: n(p.saves), views: n(p.views), reach: n(p.reach), watchMinutes: n(p.watch_minutes) }));
+    const daily: GDaily[] = dailyRaw.map(d => ({ accountId: d.account_id, day: d.day, followers: d.followers, newFollowers: d.new_followers }));
+    return {
+      canEdit: EDITORS.includes(ctx.role), connected: connections.filter(c => c.provider !== 'sample').map(c => c.provider), isSample: connections.some(c => c.provider === 'sample'),
+      accounts, competitors, report: growthReport(ctx.industry, accounts, posts, daily, ctx.now, period, platform),
+    };
+  });
+}
+
+export async function addCompetitor(deps: Deps, ctx: Ctx, platform: string, rawHandle: string) {
+  requireRole(ctx, EDITORS, 'Adding competitors');
+  if (!['instagram', 'youtube'].includes(platform)) throw new HttpError(400, 'Competitors can be tracked on Instagram and YouTube.');
+  const handle = cleanHandle(platform, rawHandle);
+  if (!/^[\w.\-]{2,60}$/.test(handle)) throw new HttpError(400, 'Enter the account’s handle, for example cardekho or @CarDekho.');
+  const [count] = await deps.db.admin.query<{ n: number }>(`select count(*)::int as n from vt.social_competitors where tenant_id = $1 and platform = $2`, [ctx.tenantId, platform]);
+  if ((count?.n ?? 0) >= 10) throw new HttpError(409, 'Up to 10 competitors per platform.');
+  await deps.db.admin.query(`insert into vt.social_competitors (tenant_id, platform, handle, added_by) values ($1,$2,$3,$4) on conflict (tenant_id, platform, handle) do nothing`, [ctx.tenantId, platform, handle, ctx.userId]);
+  const provider = platform === 'youtube' ? 'youtube' : 'meta';
+  const [conn] = await deps.db.admin.query<{ id: string }>(`select id from vt.social_connections where tenant_id = $1 and provider = $2`, [ctx.tenantId, provider]);
+  if (!conn) return { added: handle, synced: false, message: `Saved. It will be looked up once ${provider === 'youtube' ? 'YouTube' : 'Instagram'} is connected.` };
+  await syncConnection(deps, ctx.tenantId, conn.id);
+  const [row] = await deps.db.admin.query<{ account_id: string | null; last_error: string | null }>(`select account_id, last_error from vt.social_competitors where tenant_id = $1 and platform = $2 and handle = $3`, [ctx.tenantId, platform, handle]);
+  return { added: handle, synced: !!row?.account_id, message: row?.last_error ?? null };
+}
+
+export async function removeCompetitor(ctx: Ctx, id: string) {
+  requireRole(ctx, EDITORS, 'Removing competitors');
+  const [row] = await ctx.db.admin.query<{ account_id: string | null }>(`delete from vt.social_competitors where id = $1 and tenant_id = $2 returning account_id`, [id, ctx.tenantId]);
+  if (!row) throw new HttpError(404, 'Competitor not found.');
+  if (row.account_id) await ctx.db.admin.query(`delete from vt.social_accounts where id = $1 and tenant_id = $2 and is_competitor`, [row.account_id, ctx.tenantId]);
+  return { removed: true };
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { handle, encrypt, decrypt, type Db } from '@vtology/server';
-import { analyzeSocial, themesOf, languageOf, timeBandOf } from '@vtology/core';
+import { analyzeSocial, growthReport, themesOf, languageOf, timeBandOf } from '@vtology/core';
 import { createTestDb } from './helpers/pglite';
 
 const LOCAL = 'local-secret-for-tests-at-least-32-chars';
@@ -95,6 +95,32 @@ describe('social footprint end to end', () => {
     const a = analyzeSocial('Automotive', acc as never, posts as never, NOW);
     expect(a.lowAudience).toBe(2);
     expect(a.top.every(p => (p.views ?? 0) >= 50)).toBe(true);
+  });
+
+  it('benchmarks against competitors, spots rising formats and keeps the plan short', () => {
+    const D = 86_400_000;
+    const accounts = [
+      { id: 'me', platform: 'instagram', name: 'Me', handle: 'me', followers: 10000, isCompetitor: false },
+      { id: 'c1', platform: 'instagram', name: 'Rival', handle: 'rival', followers: 50000, isCompetitor: true },
+    ];
+    const posts = [];
+    for (let i = 0; i < 120; i++) {
+      const recent = i < 28;
+      // the rival posts daily and reels took off in the last 4 weeks; I post every 4 days
+      posts.push({ id: `c${i}`, accountId: 'c1', platform: 'instagram', postedAt: new Date(NOW.getTime() - i * D), format: recent && i % 2 ? 'reel' : 'image', caption: 'Creta vs Seltos',
+        likes: recent && i % 2 ? 1500 : 500, comments: 20 });
+      if (i % 4 === 0) posts.push({ id: `m${i}`, accountId: 'me', platform: 'instagram', postedAt: new Date(NOW.getTime() - i * D), format: 'image', caption: 'On-road price', likes: 120, comments: 5 });
+    }
+    // only the last 10 days of new-follower data: no fake change against an empty earlier month
+    const daily = Array.from({ length: 10 }, (_, d) => ({ accountId: 'me', day: new Date(NOW.getTime() - d * D).toISOString().slice(0, 10), followers: 10000 - d * 5, newFollowers: 5 }));
+    const g = growthReport('Automotive', accounts, posts, daily, NOW, 'month');
+    expect(g.period.now.newFollowers).toBeNull();
+    const rows = g.benchmark.instagram!;
+    expect(rows.find(r => r.isYou)!.postsPerWeek).toBe(2); // 8 posts in the 28-day window, both ends included
+    expect(rows.find(r => !r.isYou)!.postsPerWeek).toBeGreaterThanOrEqual(7);
+    expect(g.trends.instagram!.find(t => t.dimension === 'format' && t.key === 'reel')!.status).toBe('rising');
+    expect(g.plan.some(a => /Post more often on Instagram/.test(a.title))).toBe(true);
+    expect(g.plan.length).toBeLessThanOrEqual(6);
   });
 
   it('sample workspaces come with a sample social footprint and findings', async () => {

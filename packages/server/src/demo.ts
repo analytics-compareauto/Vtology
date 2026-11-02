@@ -319,17 +319,61 @@ export function generateSocial(industry: Industry, now: Date) {
         views: yt || format === 'reel' || format === 'video' ? Math.round(reach * (yt ? 1 : 1.3)) : null,
         reach: yt ? null : reach, likes: Math.round(inter * 0.72), comments: Math.round(inter * 0.07),
         shares: Math.round(inter * 0.09), saves: a.platform === 'instagram' ? Math.round(inter * 0.12) : null,
-        watchMinutes: yt ? Math.round(reach * (format === 'short' ? 0.4 : 3.2) * Math.min(lift, 2)) : null,
+        watchMinutes: yt ? Math.round(reach * (format === 'short' ? 0.4 : 3.2) * Math.min(lift, 2)) : format === 'reel' ? Math.round(reach * 0.3 * Math.min(lift, 2)) : format === 'video' ? Math.round(reach * 0.5) : null,
         avgViewPct: yt ? Math.min(95, Math.round((format === 'short' ? 62 : 38) * Math.min(lift, 1.6))) : null,
       });
     }
   }
-  return { accounts, posts };
+  // fictional competitors: public numbers only (likes, comments; views on YouTube). They post more
+  // often, lean on reels and shorts, and the first theme is rising across the industry recently.
+  const COMP: Record<Industry, [string, string][]> = {
+    Automotive: [['Gaadi Guru', 'gaadiguru'], ['Torque Talk India', 'torquetalkindia'], ['Motorwala', 'motorwala.in']],
+    BFSI: [['PaisaPlus', 'paisaplus'], ['Kosh Bank', 'koshbank'], ['Arthik Money', 'arthikmoney']],
+    FMCG: [['Swad Kitchen', 'swadkitchen'], ['Nashta Co', 'nashtaco'], ['Tiffin Tales', 'tiffintales']],
+  };
+  const competitors: typeof accounts = [];
+  for (const [name, handle] of COMP[industry]) {
+    competitors.push({ platform: 'instagram', externalId: `ig-${handle}`, handle, name, followers: r.int(250000, 1400000), posts: r.int(110, 190) });
+    competitors.push({ platform: 'youtube', externalId: `yt-${handle}`, handle: `@${handle}`, name, followers: r.int(90000, 900000), posts: r.int(35, 70) });
+  }
+  const compFormats: Record<string, [string, number, number][]> = { instagram: [['reel', 62, 1.5], ['carousel', 23, 1.15], ['image', 15, 0.7]], youtube: [['video', 40, 1.0], ['short', 60, 1.3]] };
+  for (const a of competitors) {
+    for (let i = 0; i < a.posts; i++) {
+      const day = r.int(1, 170);
+      const recent = day <= 28;
+      const [, , themeLift0, caps] = r.weighted(cfg.tpl.map((t, k) => [t, t[1] * (recent && k === 0 ? 2.5 : 1)] as const));
+      const themeLift = themeLift0 * (recent && caps === cfg.tpl[0]![3] ? 1.3 : 1);
+      const [format, , fLift] = r.weighted(compFormats[a.platform]!.map(f => [f, f[1]] as const));
+      const [hour, tLift] = r.pick(timeLift);
+      const postedAt = new Date(now.getTime() - day * 86_400_000);
+      postedAt.setUTCHours(hour, 0, 0, 0);
+      postedAt.setTime(postedAt.getTime() - 330 * 60_000);
+      const lift = themeLift * fLift * tLift * Math.exp((r.next() - 0.5) * 0.7);
+      const inter = Math.round(a.followers * 0.011 * lift);
+      const yt = a.platform === 'youtube';
+      const tags = r.chance(0.6) ? ` #${cfg.handle.slice(0, 4)}${r.pick(['tips', 'india', 'daily', 'reels'])} #${r.pick(['trending', 'india', 'viral', 'explore'])}` : '';
+      posts.push({ accountExternalId: a.externalId, platform: a.platform, externalId: `${a.externalId}-p${i}`, postedAt, format, caption: r.pick(caps) + tags,
+        views: yt ? Math.round(inter * 22) : null, reach: null, likes: Math.round(inter * 0.9), comments: Math.round(inter * 0.1), shares: null, saves: null, watchMinutes: null, avgViewPct: null });
+    }
+  }
+  // daily follower history, 120 days: competitors grow faster than the brand
+  const daily: { externalId: string; day: string; followers: number; newFollowers: number | null }[] = [];
+  for (const a of [...accounts, ...competitors]) {
+    const own = accounts.includes(a);
+    const monthly = own ? (a.platform === 'instagram' ? 0.012 : a.platform === 'youtube' ? 0.02 : 0.004) : 0.02 + r.next() * 0.03;
+    let f = Math.round(a.followers / Math.pow(1 + monthly, 4));
+    for (let d = 120; d >= 0; d--) {
+      const gain = Math.max(0, Math.round(f * monthly / 30 * (0.5 + r.next())));
+      f = d === 0 ? a.followers : Math.min(a.followers, f + gain);
+      daily.push({ externalId: a.externalId, day: new Date(now.getTime() - d * 86_400_000).toISOString().slice(0, 10), followers: f, newFollowers: own && a.platform !== 'youtube' && d <= 30 ? gain : null });
+    }
+  }
+  return { accounts, posts, competitors, daily };
 }
 
 /** Put the sample social footprint into a workspace (sample workspaces only). */
 export async function loadSampleSocial(ctx: Ctx) {
-  const { accounts, posts } = generateSocial(ctx.industry, ctx.now);
+  const { accounts, posts, competitors, daily } = generateSocial(ctx.industry, ctx.now);
   await ctx.db.transaction(async sql => {
     const [conn] = await sql.query<{ id: string }>(`insert into vt.social_connections (tenant_id, provider, label, connected_by, last_sync_at) values ($1, 'sample', 'Sample accounts (fictional)', $2, now()) returning id`, [ctx.tenantId, ctx.userId]);
     const ids = new Map<string, string>();
@@ -338,6 +382,16 @@ export async function loadSampleSocial(ctx: Ctx) {
         [ctx.tenantId, conn!.id, a.platform, a.externalId, a.handle, a.name, a.followers, a.posts]);
       ids.set(a.externalId, row!.id);
     }
+    for (const a of competitors) {
+      const [row] = await sql.query<{ id: string }>(`insert into vt.social_accounts (tenant_id, connection_id, platform, external_id, handle, name, followers, posts_count, is_competitor) values ($1,$2,$3,$4,$5,$6,$7,$8,true) returning id`,
+        [ctx.tenantId, conn!.id, a.platform, a.externalId, a.handle, a.name, a.followers, a.posts]);
+      ids.set(a.externalId, row!.id);
+      await sql.query(`insert into vt.social_competitors (tenant_id, platform, handle, account_id, added_by) values ($1,$2,$3,$4,$5)`, [ctx.tenantId, a.platform, a.handle.replace(/^@/, ''), row!.id, ctx.userId]);
+    }
+    // one statement for the whole history (about 1,100 rows)
+    await sql.query(`insert into vt.social_account_daily (account_id, tenant_id, day, followers, new_followers)
+       select a, $1, d::date, f, nf from unnest($2::uuid[], $3::text[], $4::int[], $5::int[]) as t(a, d, f, nf)`,
+      [ctx.tenantId, daily.map(d => ids.get(d.externalId)), daily.map(d => d.day), daily.map(d => d.followers), daily.map(d => d.newFollowers)]);
     for (const p of posts) await sql.query(
       `insert into vt.social_posts (tenant_id, account_id, external_id, posted_at, format, caption, views, reach, likes, comments, shares, saves, watch_minutes, avg_view_pct, metrics_at)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now())`,

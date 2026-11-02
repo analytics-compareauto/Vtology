@@ -27,5 +27,9 @@ export const MIGRATIONS: { id: string; sql: string }[] = [
   {
     "id": "20261103000007_social_thumbnails",
     "sql": "-- Post thumbnails for the social dashboard (a picture link from the platform, refreshed on each sync)\nalter table vt.social_posts add column if not exists thumbnail_url text;\n"
+  },
+  {
+    "id": "20261103000008_growth",
+    "sql": "-- Growth and benchmarking: the competitors a brand tracks, and daily follower history.\n-- Competitor data is what each platform shows publicly (followers, posts, likes, comments, views).\ncreate table if not exists vt.social_competitors (\n  id uuid primary key default gen_random_uuid(),\n  tenant_id uuid not null references vt.tenants(id) on delete cascade,\n  platform text not null check (platform in ('instagram', 'youtube', 'facebook')),\n  handle text not null,\n  account_id uuid references vt.social_accounts(id) on delete set null,\n  added_by uuid,\n  added_at timestamptz not null default now(),\n  last_error text,\n  unique (tenant_id, platform, handle)\n);\nalter table vt.social_competitors enable row level security;\ncreate policy social_competitors_read on vt.social_competitors for select to authenticated using (vt.sees_social(tenant_id));\ngrant select on vt.social_competitors to authenticated;\n\n-- new followers per day (when the platform reports it) next to the follower total\nalter table vt.social_account_daily add column if not exists new_followers int;\nalter table vt.social_account_daily add column if not exists posts_count int;\n"
   }
 ];

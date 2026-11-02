@@ -9,6 +9,7 @@ export const IconPartners = I(<><circle cx="8" cy="8" r="3" /><circle cx="17" cy
 export const IconSocial = I(<><path d="M4 19V9M9 19V5M14 19v-7M19 19V8" /><path d="M3 21h18" /></>);
 export const IconApprovals = I(<><path d="M9 11l2.5 2.5L16 9" /><rect x="3.5" y="3.5" width="17" height="17" rx="4" /></>);
 export const IconData = I(<><ellipse cx="12" cy="6" rx="7.5" ry="2.8" /><path d="M4.5 6v6c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8V6M4.5 12v6c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8v-6" /></>);
+export const IconGrowth = I(<><path d="M3 17l6-6 4 4 8-8" /><path d="M15 7h6v6" /></>);
 export const IconUp = I(<path d="M5 15l7-7 7 7" />);
 export const IconDown = I(<path d="M5 9l7 7 7-7" />);
 export const IconSpark = I(<><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6" /></>);

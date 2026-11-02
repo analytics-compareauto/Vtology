@@ -3,7 +3,7 @@ import { STAGES } from '@vtology/core';
 import type { WorkspaceData } from '../Dashboard';
 import { RULES, inr, num, pct } from '../format';
 
-type Tab = 'overview' | 'journeys' | 'findings' | 'partners' | 'social' | 'approvals' | 'data';
+type Tab = 'overview' | 'journeys' | 'findings' | 'partners' | 'social' | 'growth' | 'approvals' | 'data';
 
 export function Overview({ data, go }: { data: WorkspaceData; go: (t: Tab) => void }) {
   const { me, journeys, findings, partners } = data;
