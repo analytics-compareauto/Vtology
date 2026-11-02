@@ -28,6 +28,8 @@ export interface ScoredPost extends SocialPost { interactions: number; engagemen
 export interface SocialAnalysis {
   windowDays: number;
   posts: number;
+  /** Posts left out of comparisons because too few people saw them for a ratio to mean anything. */
+  lowAudience: number;
   byPlatform: { platform: string; posts: number; views: number; interactions: number; medianEngagement: number | null }[];
   segments: Segment[];
   insights: Insight[];
@@ -115,17 +117,26 @@ const n0 = (x: number | null | undefined) => (typeof x === 'number' && Number.is
 
 function score(industry: Industry, p: SocialPost, followers: number | null | undefined): Omit<ScoredPost, 'lift'> {
   const interactions = n0(p.likes) + n0(p.comments) + n0(p.shares) + n0(p.saves);
-  const base = n0(p.reach) || n0(p.views) || n0(followers);
+  // Who saw it: reach, else views. Followers stand in only when the platform gives neither.
+  const audience = p.reach ?? p.views ?? null;
+  const base = audience !== null ? audience : n0(followers);
+  // 2 likes on 3 views is not a 67% engagement rate; it is noise. Leave such posts out of ratios.
+  const reliable = audience === null ? base > 0 : audience >= MIN_AUDIENCE;
   return {
     ...p, interactions,
-    engagement: base > 0 ? interactions / base : null,
+    engagement: reliable && base > 0 ? interactions / base : null,
     themes: themesOf(industry, p.caption), timeBand: timeBandOf(p.postedAt), dayType: dayTypeOf(p.postedAt),
     language: languageOf(p.caption), lengthBand: lengthOf(p.caption),
   };
 }
 
 const MIN_POSTS = 3;
+/** Fewer people than this saw the post: too small for its engagement rate to be compared. */
+export const MIN_AUDIENCE = 50;
+/** Groups smaller than this are reported, but marked as an early signal. */
+const SOLID_POSTS = 8;
 const fmt = (x: number) => `${x >= 10 ? Math.round(x) : x.toFixed(1)}×`;
+const early = (s: { posts: number }) => s.posts < SOLID_POSTS ? 'Early signal. ' : '';
 const pctOf = (x: number) => `${Math.round(x * 100)}%`;
 
 export function analyzeSocial(industry: Industry, accounts: SocialAccount[], posts: SocialPost[], now: Date, windowDays = 180): SocialAnalysis {
@@ -165,9 +176,9 @@ export function analyzeSocial(industry: Industry, accounts: SocialAccount[], pos
   const best = (d: Dimension) => meaningful.filter(s => s.dimension === d).sort((a, b) => b.lift - a.lift);
   for (const s of meaningful) {
     if (s.lift >= 1.3 && s.posts >= MIN_POSTS) insights.push({ kind: 'working', dimension: s.dimension, key: s.key, strength: s.lift * Math.sqrt(s.posts),
-      title: `${s.label} get ${fmt(s.lift)} your usual engagement`, detail: `Across ${s.posts} posts. ${s.share < 0.2 ? `Only ${pctOf(s.share)} of what you post, so there is room to do more.` : `${pctOf(s.share)} of what you post.`}` });
+      title: `${s.label} get ${fmt(s.lift)} your usual engagement`, detail: `${early(s)}Across ${s.posts} posts. ${s.share < 0.2 ? `Only ${pctOf(s.share)} of what you post, so there is room to do more.` : `${pctOf(s.share)} of what you post.`}` });
     if (s.lift <= 0.75 && s.posts >= MIN_POSTS) insights.push({ kind: 'not_working', dimension: s.dimension, key: s.key, strength: (1 / Math.max(s.lift, 0.05)) * Math.sqrt(s.posts),
-      title: `${s.label} get ${fmt(s.lift)} your usual engagement`, detail: `Across ${s.posts} posts, ${pctOf(s.share)} of your output.${s.share >= 0.25 ? ' A large share of effort going to your weakest content.' : ''}` });
+      title: `${s.label} get ${fmt(s.lift)} your usual engagement`, detail: `${early(s)}Across ${s.posts} posts, ${pctOf(s.share)} of your output.${s.share >= 0.25 ? ' A large share of effort going to your weakest content.' : ''}` });
   }
   // what to try next: concrete shifts derived from the strongest contrasts
   const theme = best('theme'), format = best('format'), time = best('time'), lang = best('language');
@@ -206,6 +217,7 @@ export function analyzeSocial(industry: Industry, accounts: SocialAccount[], pos
   const platforms = [...new Set(scored.map(p => p.platform))];
   return {
     windowDays, posts: scored.length,
+    lowAudience: scored.filter(p => p.engagement === null && (p.reach ?? p.views ?? null) !== null).length,
     byPlatform: platforms.map(pl => {
       const ps = scored.filter(p => p.platform === pl);
       const es = ps.filter(p => p.engagement !== null).map(p => p.engagement!);

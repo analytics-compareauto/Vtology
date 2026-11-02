@@ -12,7 +12,7 @@ interface Overview {
   canConnect: boolean;
   providers: { meta: boolean; youtube: boolean; linkedin: boolean; secret: boolean };
   connections: Connection[]; accounts: Account[]; campaigns: Campaign[];
-  analysis: { windowDays: number; posts: number; byPlatform: { platform: string; posts: number; views: number; interactions: number; medianEngagement: number | null }[]; segments: Segment[]; insights: Insight[]; top: (ScoredPost & { postedAt: string })[]; bottom: (ScoredPost & { postedAt: string })[] };
+  analysis: { windowDays: number; posts: number; lowAudience?: number; byPlatform: { platform: string; posts: number; views: number; interactions: number; medianEngagement: number | null }[]; segments: Segment[]; insights: Insight[]; top: (ScoredPost & { postedAt: string })[]; bottom: (ScoredPost & { postedAt: string })[] };
 }
 
 const PLATFORM: Record<string, string> = { instagram: 'Instagram', facebook: 'Facebook', youtube: 'YouTube', linkedin: 'LinkedIn' };
@@ -139,7 +139,7 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
                 {DIMS.map(d => <button key={d.id} aria-pressed={dim === d.id} onClick={() => setDim(d.id)}>{d.label}</button>)}
               </div>
             </div>
-            <p className="muted small" style={{ maxWidth: '72ch' }}>1× is each account’s typical engagement. Groups with fewer than 3 posts are left out.</p>
+            <p className="muted small" style={{ maxWidth: '72ch' }}>1× is each account’s typical engagement. Groups with fewer than 3 posts are left out; groups under 8 posts are early signals.{a.lowAudience ? ` ${num(a.lowAudience)} posts seen by fewer than 50 people are not compared, because a few likes on a handful of views would look like a huge win.` : ''}</p>
             {segs.length === 0 ? <div className="empty">Not enough posts in any group yet.</div> : (
               <div className="lift-list">
                 {segs.map(sg => (

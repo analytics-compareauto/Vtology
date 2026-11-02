@@ -63,7 +63,7 @@ async function getJson<T>(f: typeof fetch, url: string, init?: RequestInit): Pro
 }
 
 // ===================================================================== Meta (Instagram + Facebook)
-const META_SCOPES = ['pages_show_list', 'pages_read_engagement', 'read_insights', 'instagram_basic', 'instagram_manage_insights', 'business_management', 'ads_read', 'leads_retrieval', 'pages_manage_ads'];
+const META_SCOPES = ['pages_show_list', 'pages_read_engagement', 'pages_read_user_content', 'read_insights', 'instagram_basic', 'instagram_manage_insights', 'business_management', 'ads_read', 'leads_retrieval', 'pages_manage_ads'];
 
 const meta = {
   graph: (cfg: SocialConfig) => `https://graph.facebook.com/${cfg.meta?.version ?? 'v23.0'}`,
