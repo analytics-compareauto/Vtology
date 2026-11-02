@@ -214,8 +214,9 @@ function PlatformBlock({ pl, rows, trends, tags, posts }: { pl: string; rows: Be
   const comps = rows.filter(r => !r.isYou);
   const byEr = [...rows].filter(r => r.erPerPost !== null).sort((a, b) => b.erPerPost! - a.erPerPost!);
   const rank = you ? byEr.findIndex(r => r.isYou) + 1 : 0;
+  const sizeGap = you && you.followers && comps.length ? Math.max(...comps.map(c => c.followers ?? 0)) / you.followers : 0;
   const maxF = Math.max(1, ...rows.map(r => r.followers ?? 0));
-  const maxEr = Math.max(0.0001, ...rows.map(r => r.erPerPost ?? 0));
+  const maxEr = Math.max(0.0001, ...rows.filter(r => r.comparable).map(r => r.erPerPost ?? 0));
   const cad = comps.length ? [...comps.map(c => c.postsPerWeek)].sort((a, b) => a - b)[Math.floor(comps.length / 2)]! : null;
   const rising = trends.filter(t => t.status === 'rising'), falling = trends.filter(t => t.status === 'falling');
   const formats = trends.filter(t => t.dimension === 'format' && t.liftRecent !== null).sort((a, b) => b.liftRecent! - a.liftRecent!);
@@ -226,8 +227,8 @@ function PlatformBlock({ pl, rows, trends, tags, posts }: { pl: string; rows: Be
         <div className="panel-head">
           <div>
             <h2 style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span className={`pf ${pl}`}>{SHORT[pl]}</span>
-              {you && comps.length ? `${name}: you rank #${rank} of ${byEr.length} on engagement${cad !== null ? `, and post ${you.postsPerWeek.toFixed(1)} times a week against ${cad.toFixed(1)}` : ''}` : `${name}: you and your competitors`}</h2>
-            <p>Last 4 weeks for posting and share of voice; last 4 months for engagement. Your row is highlighted.</p>
+              {you && comps.length ? (you.comparable ? `${name}: you rank #${rank} of ${byEr.length} on engagement${cad !== null ? `, and post ${you.postsPerWeek.toFixed(1)} times a week against ${cad.toFixed(1)}` : ''}` : `${name}: competitors are up to ${compact(sizeGap)}× your size and post ${cad !== null ? `${cad.toFixed(1)} times a week against your ${you.postsPerWeek.toFixed(1)}` : 'more often'}`) : `${name}: you and your competitors`}</h2>
+            <p>Last 4 weeks for posting and share of voice; last 4 months for engagement. Your row is highlighted.{you && !you.comparable ? ' Engagement per follower is greyed out where accounts differ in size by more than 10×: a small account’s posts often reach people beyond its followers, which inflates the rate.' : ''}</p>
           </div>
         </div>
         <div className="table-wrap" style={{ boxShadow: 'none' }}>
@@ -240,7 +241,7 @@ function PlatformBlock({ pl, rows, trends, tags, posts }: { pl: string; rows: Be
                   <td><div className="cell-bar"><span>{r.followers === null ? '—' : compact(r.followers)}</span><i style={{ width: `${((r.followers ?? 0) / maxF) * 100}%` }} /></div></td>
                   <td className="num">{r.growth === null ? <span className="muted small">{r.growthDays ? `${r.growthDays} days tracked` : 'tracking'}</span> : <b style={{ color: r.growth >= 0 ? 'var(--ok)' : 'var(--leak)' }}>{r.growth >= 0 ? '+' : ''}{(r.growth * 100).toFixed(1)}%</b>}</td>
                   <td className="num">{r.postsPerWeek.toFixed(1)}</td>
-                  <td><div className="cell-bar"><span>{r.erPerPost === null ? '—' : `${(r.erPerPost * 100).toFixed(2)}%`}</span><i className="alt" style={{ width: `${((r.erPerPost ?? 0) / maxEr) * 100}%` }} /></div></td>
+                  <td style={{ opacity: r.comparable ? 1 : 0.45 }} title={r.comparable ? undefined : 'Not comparable: account size differs by more than 10×'}><div className="cell-bar"><span>{r.erPerPost === null ? '—' : `${(r.erPerPost * 100).toFixed(2)}%`}</span><i className="alt" style={{ width: `${Math.min(100, ((r.erPerPost ?? 0) / maxEr) * 100)}%` }} /></div></td>
                   <td>{r.topFormat ?? '—'}{r.topFormatShare !== null && <span className="muted small"> {pct(r.topFormatShare)}</span>}</td>
                   <td><div className="cell-bar"><span>{pct(r.shareOfVoice)}</span><i className="sov" style={{ width: `${r.shareOfVoice * 100}%` }} /></div></td>
                 </tr>

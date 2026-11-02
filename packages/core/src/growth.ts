@@ -25,6 +25,8 @@ export interface BenchRow {
   postsPerWeek: number; erPerPost: number | null; interactionsPerPost: number | null; topFormat: string | null; topFormatShare: number | null;
   /** share of all public interactions in the set over the last 30 days */
   shareOfVoice: number;
+  /** false when this account is over 10× bigger or smaller than the median account in the set */
+  comparable: boolean;
 }
 export interface Trend { dimension: Dimension; key: string; label: string; platform: string; liftRecent: number | null; liftBefore: number | null; shareRecent: number; shareBefore: number; postsRecent: number; yourShare: number; yourPosts: number; status: 'rising' | 'falling' | 'steady' }
 export interface Tag { tag: string; posts: number; accounts: number; lift: number | null }
@@ -140,8 +142,12 @@ export function growthReport(industry: Industry, accounts: GAccount[], posts: GP
         interactionsPerPost: mine.length ? median(mine.map(publicEngagement)) : null,
         topFormat: top ? labelOf(industry, 'format', top[0]) : null, topFormatShare: top && mine.length ? top[1] / mine.length : null,
         shareOfVoice: voiceTotal ? last30.filter(p => p.accountId === a.id).reduce((s, p) => s + publicEngagement(p), 0) / voiceTotal : 0,
+        comparable: true,
       };
     }).sort((x, y) => n0(y.followers) - n0(x.followers));
+
+    { const mf = median(benchmark[pl]!.map(r => n0(r.followers)).filter(x => x > 0));
+      for (const r of benchmark[pl]!) r.comparable = !!r.followers && mf > 0 && mf / r.followers <= 10 && r.followers / mf <= 10; }
 
     // ---- what's rising: last 4 weeks against the 12 before, across everyone in the set
     const recent = plPosts.filter(p => p.postedAt.getTime() >= T - 28 * DAY), earlier = plPosts.filter(p => p.postedAt.getTime() < T - 28 * DAY);
@@ -157,7 +163,8 @@ export function growthReport(industry: Industry, accounts: GAccount[], posts: GP
         const liftRecent = lr.length >= 2 ? median(lr) : null, liftBefore = le.length >= 2 ? median(le) : null;
         const shareRecent = recent.length ? r.length / recent.length : 0, shareBefore = earlier.length ? e.length / earlier.length : 0;
         const y = youRecent.filter(p => keysOf(dim, p).includes(key));
-        const up = (liftRecent ?? 0) >= 1.1 && (shareRecent - shareBefore >= 0.05 || (liftBefore !== null && liftRecent! - liftBefore >= 0.2));
+        // rising: better engagement and not losing its place in what the industry posts
+        const up = (liftRecent ?? 0) >= 1.1 && (shareRecent - shareBefore >= 0.05 || (liftBefore !== null && liftRecent! - liftBefore >= 0.2 && shareRecent >= shareBefore - 0.05));
         const down = (liftRecent !== null && liftRecent < 0.9 && (liftBefore === null || liftRecent < liftBefore)) || (shareBefore - shareRecent >= 0.08);
         out.push({ dimension: dim, key, label: labelOf(industry, dim, key), platform: pl, liftRecent, liftBefore, shareRecent, shareBefore, postsRecent: r.length,
           yourShare: youRecent.length ? y.length / youRecent.length : 0, yourPosts: y.length, status: up ? 'rising' : down ? 'falling' : 'steady' });
@@ -192,7 +199,11 @@ export function growthReport(industry: Industry, accounts: GAccount[], posts: GP
     if (you.growth !== null && compGrowth.length && you.growth < median(compGrowth))
       plan.push({ platform: pl, impact: 'high', title: `${name} followers are growing slower than competitors`, why: `You grew ${pctTxt(you.growth)} over the last ${you.growthDays} days; competitors grew ${pctTxt(median(compGrowth))} (median).`, evidence: `Daily follower tracking` });
     const compEr = comps.map(c => c.erPerPost).filter((x): x is number => x !== null);
-    if (you.erPerPost !== null && compEr.length && you.erPerPost > median(compEr) * 1.2 && you.postsPerWeek < compCadence)
+    // engagement per follower only compares fairly between accounts of similar size: a 200-follower
+    // account whose posts reach non-followers shows a huge rate that means little
+    const compF = median(comps.map(c => n0(c.followers)));
+    const comparable = !!you.followers && compF > 0 && compF / you.followers <= 10 && you.followers / compF <= 10;
+    if (comparable && you.erPerPost !== null && compEr.length && you.erPerPost > median(compEr) * 1.2 && you.postsPerWeek < compCadence)
       plan.push({ platform: pl, impact: 'medium', title: `Your ${name} posts land well: publish more of them`, why: `Each post gets ${(you.erPerPost * 100).toFixed(2)}% of followers engaging, against ${(median(compEr) * 100).toFixed(2)}% for competitors. More posts at that quality is the fastest route to growth.`, evidence: `Engagement per follower, last 4 months` });
     const rising = (trends[pl] ?? []).filter(t => t.status === 'rising' && t.dimension !== 'time');
     for (const t of rising.slice(0, 2)) {
