@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Dimension, Insight, ScoredPost, Segment } from '@vtology/core';
+import { liftPhrase, type Dimension, type Insight, type PlatformSummary, type ScoredPost, type Segment, type SocialView } from '@vtology/core';
 import type { WorkspaceData } from '../Dashboard';
 import { api, ApiError } from '../api';
 import { ago, change, compact, inr, num, pct } from '../format';
@@ -17,9 +17,10 @@ interface Overview {
   connections: Connection[]; accounts: Account[]; campaigns: Campaign[];
   analysis: {
     windowDays: number; posts: number; lowAudience?: number;
-    weekly?: { week: string; platform: string; posts: number; interactions: number; audience: number }[];
-    byPlatform: { platform: string; posts: number; views: number; interactions: number; medianEngagement: number | null }[];
+    weekly?: { week: string; platform: string; posts: number; interactions: number; views: number; reach: number }[];
+    byPlatform: PlatformSummary[];
     segments: Segment[]; insights: Insight[]; top: Post[]; bottom: Post[];
+    perPlatform?: Record<string, SocialView>;
   };
 }
 
@@ -38,9 +39,16 @@ const DIMS: { id: Dimension; label: string; noun: string }[] = [
 ];
 const METRICS = [
   { id: 'interactions', label: 'Interactions', noun: 'interactions' },
-  { id: 'audience', label: 'Views and reach', noun: 'views and reach' },
+  { id: 'views', label: 'Views', noun: 'views' },
+  { id: 'reach', label: 'Reach', noun: 'reach' },
   { id: 'posts', label: 'Posts', noun: 'posts' },
 ] as const;
+/** What each platform reports, so a missing number is explained rather than shown as zero. */
+const NOT_REPORTED: Record<string, { views?: string; reach?: string }> = {
+  facebook: { views: 'Facebook reports reach for Page posts, not views' },
+  youtube: { reach: 'YouTube reach needs the YouTube Analytics connection' },
+  instagram: {},
+};
 type Metric = typeof METRICS[number]['id'];
 
 function mondayOf(d: Date) {
@@ -58,6 +66,7 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
   const [dim, setDim] = useState<Dimension>('format');
   const [metric, setMetric] = useState<Metric>('interactions');
   const [manage, setManage] = useState(false);
+  const [only, setOnly] = useState<string>('all');
   const T = `/tenants/${workspaceId}`;
 
   const load = useCallback(() => api<Overview>('GET', `${T}/social`).then(r => { setO(r); setError(null); return r; }).catch(e => { setError(e instanceof ApiError ? e.message : 'Could not load social data.'); return null; }), [T]);
@@ -101,37 +110,44 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
     if (!o) return null;
     const a = o.analysis;
     const weekly = a.weekly ?? [];
-    const platforms = ORDER.filter(p => a.byPlatform.some(b => b.platform === p && b.posts > 0));
+    const present = ORDER.filter(p => a.byPlatform.some(b => b.platform === p && b.posts > 0));
+    const platforms = only === 'all' ? present : present.filter(p => p === only);
     // the last 26 complete-or-current weeks, gaps filled with zero
     const end = mondayOf(new Date());
     const weeks = Array.from({ length: 26 }, (_, i) => new Date(end.getTime() - (25 - i) * 7 * 86_400_000).toISOString().slice(0, 10));
     const val = (p: string, w: string, m: Metric) => { const r = weekly.find(x => x.platform === p && x.week === w); return r ? r[m] : 0; };
     const series = (m: Metric) => platforms.map(p => ({ key: p, label: PLATFORM[p]!, color: COLOR[p]!, values: weeks.map(w => val(p, w, m)) }));
     const last4 = (vals: number[]) => sum(vals.slice(-4)), prev4 = (vals: number[]) => sum(vals.slice(-8, -4));
-    return { a, platforms, weeks, series, last4, prev4 };
-  }, [o]);
+    const view: SocialView = only !== 'all' && a.perPlatform?.[only] ? a.perPlatform[only]! : { platform: null, rated: 0, segments: a.segments, insights: a.insights, top: a.top, bottom: a.bottom };
+    return { a, present, platforms, weeks, series, last4, prev4, view };
+  }, [o, only]);
 
-  const segs = useMemo(() => (o?.analysis.segments ?? []).filter(s => s.dimension === dim && !(s.dimension === 'theme' && s.key === 'other')).sort((x, y) => y.lift - x.lift), [o, dim]);
+  const segs = useMemo(() => (derived?.view.segments ?? []).filter(s => s.dimension === dim && !(s.dimension === 'theme' && s.key === 'other')).sort((x, y) => y.lift - x.lift), [derived, dim]);
 
   if (error) return <div className="error-box" role="alert">{error}</div>;
   if (!o || !derived) return <div className="progress" />;
 
-  const { a, platforms, weeks, series, last4, prev4 } = derived;
+  const { a, present, platforms, weeks, series, last4, prev4, view } = derived;
+  const plName = only === 'all' ? null : PLATFORM[only]!;
+  const scopeSummaries = a.byPlatform.filter(b => platforms.includes(b.platform));
+  const sumOrNull = (k: 'views' | 'reach') => { const xs = scopeSummaries.map(b => b[k]).filter((x): x is number => x !== null); return xs.length ? sum(xs) : null; };
+  const viewsAll = sumOrNull('views'), reachAll = sumOrNull('reach');
+  const postsScope = sum(scopeSummaries.map(b => b.posts));
+  const metricsHere = METRICS.filter(m => m.id === 'interactions' || m.id === 'posts' || (m.id === 'views' ? viewsAll !== null : reachAll !== null));
   const real = o.connections.filter(c => c.provider !== 'sample');
   const sample = o.connections.find(c => c.provider === 'sample');
   const lastSync = real.map(c => c.last_sync_at).filter(Boolean).sort().pop();
   const seesMoney = o.campaigns.some(c => c.spend !== null);
   const paid = o.campaigns.filter(c => /meta|google|youtube|search|programmatic/i.test(c.channel) || c.code.startsWith('meta:'));
-  const trend = series(metric);
+  const m0: Metric = metricsHere.some(x => x.id === metric) ? metric : 'interactions';
+  const trend = series(m0);
   const totalNow = sum(trend.map(s => last4(s.values))), totalBefore = sum(trend.map(s => prev4(s.values)));
   const mover = [...trend].sort((x, y) => (last4(y.values) - prev4(y.values)) - (last4(x.values) - prev4(x.values)))[0];
-  const metricNoun = METRICS.find(m => m.id === metric)!.noun;
-  const followers = sum(o.accounts.map(x => x.followers ?? 0));
-  const interactionsAll = sum(a.byPlatform.map(b => b.interactions));
-  const reachAll = sum(a.byPlatform.map(b => b.views));
+  const metricNoun = METRICS.find(m => m.id === m0)!.noun;
+  const followers = sum(o.accounts.filter(x => platforms.includes(x.platform)).map(x => x.followers ?? 0));
   const iNow = sum(series('interactions').map(s => last4(s.values))), iBefore = sum(series('interactions').map(s => prev4(s.values)));
 
-  const best = segs.find(s => s.lift >= 1.15), worst = [...segs].reverse().find(s => s.lift <= 0.85);
+  const best = segs.find(s => s.lift >= 1.15);
   const cut = segs.filter(s => s.lift <= 0.85).sort((x, y) => y.share - x.share)[0];
   const more = segs.filter(s => s.lift >= 1.15 && s.share < 0.3).sort((x, y) => y.lift - x.lift)[0];
   const dimNoun = DIMS.find(d => d.id === dim)!.noun;
@@ -192,74 +208,96 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
         <div className="empty">No posts yet. Connect an account to see what’s working.</div>
       ) : (
         <>
+          {/* one filter scopes everything below */}
+          <div className="toolbar" style={{ justifyContent: 'space-between' }}>
+            <div className="seg" role="group" aria-label="Platform">
+              <button aria-pressed={only === 'all'} onClick={() => setOnly('all')}>All platforms</button>
+              {present.map(p => <button key={p} aria-pressed={only === p} onClick={() => setOnly(p)}>{PLATFORM[p]}</button>)}
+            </div>
+            <span className="muted small">Last {Math.round(a.windowDays / 30)} months{plName ? `, ${plName} only` : ''}</span>
+          </div>
+
           {/* headline numbers */}
-          <section className="kpis" aria-label="Headline numbers">
-            <div className="kpi"><span className="label">Audience</span><span className="value">{compact(followers)}</span><span className="sub">followers across {o.accounts.length} accounts</span></div>
-            <div className="kpi"><span className="label">Posts</span><span className="value">{num(a.posts)}</span><span className="sub">in the last {Math.round(a.windowDays / 30)} months, {(a.posts / (a.windowDays / 7)).toFixed(1)} a week</span></div>
-            <div className="kpi"><span className="label">Views and reach</span><span className="value">{compact(reachAll)}</span><span className="sub">{reachAll && a.posts ? `${compact(reachAll / a.posts)} per post on average` : 'not reported yet'}</span></div>
+          <section className="kpis" aria-label="Headline numbers" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
+            <div className="kpi"><span className="label">Followers</span><span className="value">{compact(followers)}</span><span className="sub">{plName ?? `across ${o.accounts.length} accounts`}</span></div>
+            <div className="kpi"><span className="label">Posts</span><span className="value">{num(postsScope)}</span><span className="sub">{(postsScope / (a.windowDays / 7)).toFixed(1)} a week</span></div>
+            <div className="kpi"><span className="label">Views</span><span className="value">{viewsAll === null ? '—' : compact(viewsAll)}</span><span className="sub">{viewsAll === null ? (plName ? NOT_REPORTED[only]?.views ?? 'not reported' : 'not reported') : `times your posts were played or shown${scopeSummaries.some(b => b.views === null) ? `, ${scopeSummaries.filter(b => b.views !== null).map(b => PLATFORM[b.platform]).join(' and ')} only` : ''}`}</span></div>
+            <div className="kpi"><span className="label">Reach</span><span className="value">{reachAll === null ? '—' : compact(reachAll)}</span><span className="sub">{reachAll === null ? (plName ? NOT_REPORTED[only]?.reach ?? 'not reported' : 'not reported') : `people who saw a post, added up per post${scopeSummaries.some(b => b.reach === null) ? `; ${scopeSummaries.filter(b => b.reach !== null).map(b => PLATFORM[b.platform]).join(' and ')} only` : ''}`}</span></div>
             <div className="kpi"><span className="label">Interactions, last 4 weeks</span><span className="value">{compact(iNow)}</span>
-              <span className="sub" style={{ color: iNow >= iBefore ? 'var(--ok)' : 'var(--leak)', fontWeight: 650 }}>{change(iNow, iBefore)} <span className="muted" style={{ fontWeight: 400 }}>vs the 4 weeks before ({compact(iBefore)})</span></span></div>
+              <span className="sub"><b style={{ color: iNow >= iBefore ? 'var(--ok)' : 'var(--leak)' }}>{change(iNow, iBefore)}</b> vs the 4 weeks before ({compact(iBefore)})</span></div>
           </section>
 
           {/* per platform */}
-          <section className="pf-tiles">
-            {platforms.map(p => {
-              const b = a.byPlatform.find(x => x.platform === p)!;
-              const acc = o.accounts.find(x => x.platform === p);
-              const vals = series('interactions').find(s => s.key === p)!.values;
-              const n = last4(vals), before = prev4(vals);
-              return (
-                <div className="pf-tile" key={p} style={{ ['--pf' as string]: COLOR[p] }}>
-                  <div className="head">
-                    <span className={`pf lg ${p}`}>{SHORT[p]}</span>
-                    <div style={{ minWidth: 0 }}><b>{PLATFORM[p]}</b><span>{acc?.handle ? (acc.handle.startsWith('@') ? acc.handle : '@' + acc.handle) : acc?.name}</span></div>
-                  </div>
-                  <div className="big">{acc?.followers != null ? compact(acc.followers) : '—'}<small>followers</small></div>
-                  <div>
-                    <div className="small" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                      <span className="muted">Weekly interactions</span>
-                      <b style={{ color: n >= before ? 'var(--ok)' : 'var(--leak)' }}>{change(n, before)}</b>
+          {only === 'all' && (
+            <section className="pf-tiles">
+              {platforms.map(p => {
+                const b = a.byPlatform.find(x => x.platform === p)!;
+                const acc = o.accounts.find(x => x.platform === p);
+                const vals = series('interactions').find(s => s.key === p)!.values;
+                const n = last4(vals), before = prev4(vals);
+                return (
+                  <button className="pf-tile" key={p} style={{ ['--pf' as string]: COLOR[p], textAlign: 'left', cursor: 'pointer', font: 'inherit', color: 'inherit' }} onClick={() => setOnly(p)} title={`Show ${PLATFORM[p]} only`}>
+                    <div className="head">
+                      <span className={`pf lg ${p}`}>{SHORT[p]}</span>
+                      <div style={{ minWidth: 0 }}><b>{PLATFORM[p]}</b><span>{acc?.handle ? (acc.handle.startsWith('@') ? acc.handle : '@' + acc.handle) : acc?.name}</span></div>
                     </div>
-                    <Sparkline values={vals} color={COLOR[p]!} />
-                  </div>
-                  <div className="pf-stats">
-                    <div><b>{num(b.posts)}</b><span>posts</span></div>
-                    <div><b>{compact(b.views)}</b><span>views, reach</span></div>
-                    <div><b>{b.medianEngagement != null ? `${(b.medianEngagement * 100).toFixed(1)}%` : '—'}</b><span>engagement</span></div>
-                  </div>
-                </div>
-              );
-            })}
-          </section>
+                    <div className="big">{acc?.followers != null ? compact(acc.followers) : '—'}<small>followers</small></div>
+                    <div>
+                      <div className="small" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <span className="muted">Weekly interactions</span>
+                        <b style={{ color: n >= before ? 'var(--ok)' : 'var(--leak)' }}>{change(n, before)}</b>
+                      </div>
+                      <Sparkline values={vals} color={COLOR[p]!} />
+                    </div>
+                    <div className="pf-stats" style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
+                      <div><b>{num(b.posts)}</b><span>posts</span></div>
+                      <div title={b.views === null ? NOT_REPORTED[p]?.views : undefined}><b>{b.views === null ? '—' : compact(b.views)}</b><span>views</span></div>
+                      <div title={b.reach === null ? NOT_REPORTED[p]?.reach : undefined}><b>{b.reach === null ? '—' : compact(b.reach)}</b><span>reach</span></div>
+                      <div><b>{b.medianEngagement != null ? `${(b.medianEngagement * 100).toFixed(1)}%` : '—'}</b><span>engagement</span></div>
+                    </div>
+                  </button>
+                );
+              })}
+            </section>
+          )}
 
           {/* trend */}
           <section className="panel">
             <div className="panel-head">
               <div>
-                <h2>{totalBefore === 0 && totalNow === 0 ? `Weekly ${metricNoun}` : `${metricNoun[0]!.toUpperCase() + metricNoun.slice(1)} ${totalNow >= totalBefore ? 'up' : 'down'} ${change(totalNow, totalBefore).replace(/^[+−]/, '')} in the last 4 weeks`}</h2>
-                <p>{compact(totalNow)} {metricNoun} in the last 4 weeks against {compact(totalBefore)} in the 4 before.{mover && last4(mover.values) !== prev4(mover.values) ? ` ${mover.label} moved most: ${compact(prev4(mover.values))} to ${compact(last4(mover.values))}.` : ''}</p>
+                <h2>{totalBefore === 0 && totalNow === 0 ? `Weekly ${metricNoun}` : `${plName ? `${plName} ${metricNoun}` : metricNoun[0]!.toUpperCase() + metricNoun.slice(1)} ${totalNow >= totalBefore ? 'up' : 'down'} ${change(totalNow, totalBefore).replace(/^[+−]/, '')} in the last 4 weeks`}</h2>
+                <p>{compact(totalNow)} {metricNoun} in the last 4 weeks against {compact(totalBefore)} in the 4 before.{!plName && mover && last4(mover.values) !== prev4(mover.values) ? ` ${mover.label} moved most: ${compact(prev4(mover.values))} to ${compact(last4(mover.values))}.` : ''}</p>
               </div>
               <div className="seg" role="group" aria-label="Measure">
-                {METRICS.map(m => <button key={m.id} aria-pressed={metric === m.id} onClick={() => setMetric(m.id)}>{m.label}</button>)}
+                {metricsHere.map(m => <button key={m.id} aria-pressed={m0 === m.id} onClick={() => setMetric(m.id)}>{m.label}</button>)}
               </div>
             </div>
             <div className="legend" style={{ marginBottom: 8 }}>{trend.map(s => <span key={s.key}><i className="line" style={{ background: s.color }} />{s.label}</span>)}</div>
             <LineChart x={weeks} series={trend} xFormat={weekLabel} />
+            {(m0 === 'views' || m0 === 'reach') && platforms.some(p => a.byPlatform.find(b => b.platform === p)?.[m0] === null) && (
+              <p className="muted small" style={{ marginTop: 8 }}>{platforms.filter(p => a.byPlatform.find(b => b.platform === p)?.[m0] === null).map(p => NOT_REPORTED[p]?.[m0]).filter(Boolean).join('. ')}.</p>
+            )}
           </section>
 
-          {/* what to do: verdicts */}
+          {/* what to do */}
+          <section className="panel" style={{ padding: '14px 18px' }}>
+            <p className="small" style={{ maxWidth: '100ch' }}><b>How to read the findings below.</b> Each one compares a group of posts (a theme, format, time of day, language) with the <b>typical post on the same account</b>: the middle engagement rate, where engagement rate is interactions divided by people reached. “60% more” means that group gets 1.6 times the engagement of a typical post there. {plName ? `Showing ${plName} only.` : 'Each finding names its platform; pick one above to focus on it.'}</p>
+          </section>
           <section className="verdicts">
-            <Verdict title="What’s working" tone="ok" icon={<IconUp />} items={a.insights.filter(i => i.kind === 'working').slice(0, 4)} segments={a.segments} />
-            <Verdict title="What’s not" tone="leak" icon={<IconDown />} items={a.insights.filter(i => i.kind === 'not_working').slice(0, 4)} segments={a.segments} />
-            <Verdict title="Try next" tone="flow" icon={<IconSpark />} items={a.insights.filter(i => i.kind === 'try').slice(0, 4)} segments={a.segments} />
+            <Verdict title="What’s working" tone="ok" icon={<IconUp />} items={view.insights.filter(i => i.kind === 'working').slice(0, 5)} showPlatform={!plName}
+              empty="No group of posts clearly beats your typical post (by 30% or more) yet." />
+            <Verdict title="What’s not" tone="leak" icon={<IconDown />} items={view.insights.filter(i => i.kind === 'not_working').slice(0, 5)} showPlatform={!plName}
+              empty="Nothing is clearly underperforming: no group of 3 or more posts gets 25% less engagement than your typical post." />
+            <Verdict title="Try next" tone="flow" icon={<IconSpark />} items={view.insights.filter(i => i.kind === 'try').slice(0, 5)} showPlatform={!plName}
+              empty="No clear move yet. Keep posting; suggestions appear as each group passes 3 posts seen by 50 or more people." />
           </section>
 
           {/* effort vs return */}
           <section className="panel">
             <div className="panel-head">
               <div>
-                <h2>{cut && more ? `Shift effort from ${cut.label.toLowerCase()} to ${more.label.toLowerCase()}` : best ? `${best.label} perform best at ${best.lift.toFixed(1)}× your usual` : `Effort against return, by ${DIMS.find(d => d.id === dim)!.label.toLowerCase()}`}</h2>
-                <p>{cut ? `${cut.label} take ${pct(cut.share)} of your posts but earn ${cut.lift.toFixed(1)}× your usual engagement. ` : ''}{more ? `${more.label} earn ${more.lift.toFixed(1)}× from only ${pct(more.share)} of posts. ` : ''}{!cut && !more ? `No clear gap between ${dimNoun} yet. ` : ''}Each bubble is a group of posts; bigger means more posts.</p>
+                <h2>{cut && more ? `${plName ? `On ${plName}, shift` : 'Shift'} effort from ${cut.label.toLowerCase()} to ${more.label.toLowerCase()}` : best ? `${plName ? `On ${plName}, ` : ''}${best.label.toLowerCase()} get ${liftPhrase(best.lift, plName ? only : null)}` : `Where your effort goes, and what it returns`}</h2>
+                <p>{cut ? `${cut.label} are ${pct(cut.share)} of your posts but get ${liftPhrase(cut.lift, plName ? only : null)}. ` : ''}{more ? `${more.label} get ${liftPhrase(more.lift, plName ? only : null)} from only ${pct(more.share)} of posts. ` : ''}{!cut && !more && !best ? `No clear gap between ${dimNoun} yet. ` : ''}Across: how much of your posting each group is. Up: engagement against your typical post. Bubble size: number of posts.</p>
               </div>
               <div className="seg" role="group" aria-label="Group by">
                 {DIMS.map(d => <button key={d.id} aria-pressed={dim === d.id} onClick={() => setDim(d.id)}>{d.label}</button>)}
@@ -269,38 +307,38 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
               <div className="effort-wrap">
                 <EffortMap points={segs.map(s => ({ key: s.key, label: s.label, share: s.share, lift: s.lift, posts: s.posts }))} />
                 <div>
-                  <div className="lift-axis"><span /><div><span>0.25×</span><span>1× usual</span><span>4×</span></div><span /></div>
+                  <div className="lift-axis"><span /><div><span>−75%</span><span>typical</span><span>4×</span></div><span /></div>
                   <div className="lift-list">
                     {segs.map(sg => {
                       const pos = Math.max(-1, Math.min(1, Math.log(sg.lift) / Math.log(4)));
+                      const d = Math.round((sg.lift - 1) * 100);
                       return (
-                        <div className="lift-row" key={sg.key}>
+                        <div className="lift-row" key={sg.key} title={liftPhrase(sg.lift, plName ? only : null)}>
                           <span className="lift-name">{sg.label}<span>{sg.posts} posts, {pct(sg.share)}{sg.posts < 8 ? ', early signal' : ''}</span></span>
                           <div className="lift-track" aria-hidden="true">
                             <span className="mid" />
                             <i className={sg.lift >= 1.15 ? 'up' : sg.lift <= 0.85 ? 'down' : pos >= 0 ? 'up flat' : 'down flat'} style={{ width: `${Math.max(1, Math.abs(pos) * 50)}%` }} />
                           </div>
-                          <b className="lift-val" style={{ color: sg.lift >= 1.15 ? 'var(--ok)' : sg.lift <= 0.85 ? 'var(--leak)' : undefined }}>{sg.lift.toFixed(1)}×</b>
+                          <b className="lift-val" style={{ color: sg.lift >= 1.15 ? 'var(--ok)' : sg.lift <= 0.85 ? 'var(--leak)' : undefined }}>{sg.lift >= 2 ? `${sg.lift.toFixed(1)}×` : `${d >= 0 ? '+' : '−'}${Math.abs(d)}%`}</b>
                         </div>
                       );
                     })}
                   </div>
-                  {worst && best && worst.key !== best.key && <p className="muted small" style={{ marginTop: 10 }}>{best.label} get {(best.lift / Math.max(worst.lift, 0.05)).toFixed(1)}× the engagement of {worst.label.toLowerCase()}.</p>}
                 </div>
               </div>
             )}
-            <p className="muted small" style={{ marginTop: 14, maxWidth: '90ch' }}>1× is each account’s typical engagement rate (interactions ÷ people reached), so platforms of different sizes compare fairly. Groups under 3 posts are left out.{a.lowAudience ? ` ${num(a.lowAudience)} posts reached fewer than 50 people and are not compared yet.` : ''}</p>
+            <p className="muted small" style={{ marginTop: 14, maxWidth: '90ch' }}>{plName ? `${plName} posts only.` : 'All platforms together; each post is measured against its own account, so platforms of different sizes compare fairly.'} Groups under 3 posts are left out.{a.lowAudience ? ` ${num(a.lowAudience)} posts reached fewer than 50 people and are not compared yet.` : ''}</p>
           </section>
 
           {/* posts */}
           <div className="grid-2">
             <section className="panel">
-              <div className="panel-head"><div><h2>Top posts</h2><p>Highest engagement against each account’s usual.</p></div></div>
-              <div className="posts">{a.top.slice(0, 4).map(p => <PostCard key={p.id} p={p} />)}</div>
+              <div className="panel-head"><div><h2>Top posts{plName ? ` on ${plName}` : ''}</h2><p>Most engagement compared with the typical post on the same account.</p></div></div>
+              {view.top.length ? <div className="posts">{view.top.slice(0, 4).map(p => <PostCard key={p.id} p={p as Post} />)}</div> : <div className="empty">No posts seen by 50 or more people yet.</div>}
             </section>
             <section className="panel">
-              <div className="panel-head"><div><h2>Weakest posts</h2><p>Seen by enough people, but few interacted.</p></div></div>
-              <div className="posts">{a.bottom.slice(0, 4).map(p => <PostCard key={p.id} p={p} />)}</div>
+              <div className="panel-head"><div><h2>Weakest posts{plName ? ` on ${plName}` : ''}</h2><p>Seen by 50 or more people, but few interacted.</p></div></div>
+              {view.bottom.length ? <div className="posts">{view.bottom.slice(0, 4).map(p => <PostCard key={p.id} p={p as Post} />)}</div> : <div className="empty">No posts seen by 50 or more people yet.</div>}
             </section>
           </div>
         </>
@@ -350,24 +388,21 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
   );
 }
 
-function Verdict({ title, tone, icon, items, segments }: { title: string; tone: 'ok' | 'leak' | 'flow'; icon: React.ReactNode; items: Insight[]; segments: Segment[] }) {
+function Verdict({ title, tone, icon, items, showPlatform, empty }: { title: string; tone: 'ok' | 'leak' | 'flow'; icon: React.ReactNode; items: Insight[]; showPlatform: boolean; empty: string }) {
   return (
     <div className={`verdict ${tone}`}>
       <header><span className="ic">{icon}</span><h2 style={{ fontSize: 17 }}>{title}</h2></header>
-      {items.length === 0 ? <p className="none">Nothing clear yet. This fills in as more posts reach a wider audience.</p> : (
+      {items.length === 0 ? <p className="none">{empty}</p> : (
         <ul>
-          {items.map(i => {
-            const seg = segments.find(s => s.dimension === i.dimension && s.key === i.key);
-            const early = /^Early signal\. /.test(i.detail);
-            return (
-              <li key={i.title}>
-                <span className="t">{i.title}</span>
-                {seg && i.kind !== 'try' && <LiftMeter lift={seg.lift} />}
-                <span className="d">{i.detail.replace(/^Early signal\. /, '')}</span>
-                {early && <span className="early">Early signal, under 8 posts</span>}
-              </li>
-            );
-          })}
+          {items.map(i => (
+            <li key={`${i.platform}-${i.title}`}>
+              {showPlatform && i.platform && <span style={{ display: 'flex', alignItems: 'center', gap: 6 }} className="small muted"><span className={`pf ${i.platform}`} style={{ width: 18, height: 18, fontSize: 8.5, borderRadius: 5 }}>{SHORT[i.platform]}</span>{PLATFORM[i.platform]}</span>}
+              <span className="t">{i.title}</span>
+              {i.lift !== undefined && i.kind !== 'try' && <LiftMeter lift={i.lift} />}
+              <span className="d">{i.detail}</span>
+              {i.early && <span className="early">Early signal: fewer than 8 posts</span>}
+            </li>
+          ))}
         </ul>
       )}
     </div>
@@ -383,7 +418,7 @@ function LiftMeter({ lift }: { lift: number }) {
         <span className="one" style={{ left: '50%' }} />
         <i style={{ left: up ? '50%' : `${50 + pos * 50}%`, width: `${Math.abs(pos) * 50}%`, background: up ? 'var(--ok)' : 'var(--leak)' }} />
       </div>
-      <b style={{ color: up ? 'var(--ok)' : 'var(--leak)' }}>{lift.toFixed(1)}×</b>
+      <b style={{ color: up ? 'var(--ok)' : 'var(--leak)' }}>{lift >= 2 ? `${lift.toFixed(1)}×` : `${up ? '+' : '−'}${Math.abs(Math.round((lift - 1) * 100))}%`}</b>
     </div>
   );
 }

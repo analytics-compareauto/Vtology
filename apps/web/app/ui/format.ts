@@ -19,7 +19,7 @@ export function compact(x: number): string {
 }
 /** Signed percent change, e.g. +34% or −12%. */
 export const change = (now: number, before: number) => before > 0 ? `${now >= before ? '+' : '−'}${Math.abs(Math.round(((now - before) / before) * 100))}%` : now > 0 ? 'new' : '0%';
-export const num = (x: number) => x.toLocaleString('en-IN');
+export const num = (x: number | null | undefined) => (typeof x === 'number' && Number.isFinite(x) ? x : 0).toLocaleString('en-IN');
 export function ago(iso: string): string {
   const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
   if (m < 1) return 'just now';

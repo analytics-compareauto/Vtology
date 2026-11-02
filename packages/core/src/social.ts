@@ -24,20 +24,31 @@ export interface SocialAccount { id: string; platform: SocialPost['platform']; n
 
 export type Dimension = 'theme' | 'format' | 'time' | 'day' | 'language' | 'length';
 export interface Segment { dimension: Dimension; key: string; label: string; posts: number; share: number; lift: number; medianEngagement: number }
-export interface Insight { kind: 'working' | 'not_working' | 'try'; title: string; detail: string; dimension?: Dimension; key?: string; strength: number }
+export interface Insight { kind: 'working' | 'not_working' | 'try'; title: string; detail: string; dimension?: Dimension; key?: string; strength: number; platform?: string; lift?: number; posts?: number; early?: boolean }
 export interface ScoredPost extends SocialPost { interactions: number; engagement: number | null; lift: number | null; themes: string[]; timeBand: string; dayType: string; language: string; lengthBand: string }
+export interface PlatformSummary {
+  platform: string; posts: number; interactions: number;
+  /** Totals only over posts where the platform reports the number; null when it reports none. */
+  views: number | null; reach: number | null; viewsPosts: number; reachPosts: number;
+  medianEngagement: number | null;
+}
+/** What the posts of one platform (or all together) say: groups compared with the account's typical post, and what to do. */
+export interface SocialView { platform: string | null; rated: number; segments: Segment[]; insights: Insight[]; top: ScoredPost[]; bottom: ScoredPost[] }
 export interface SocialAnalysis {
   windowDays: number;
   posts: number;
-  /** Week by week, per platform: posts, interactions and audience (reach, else views). Weeks start Monday, IST. */
-  weekly: { week: string; platform: string; posts: number; interactions: number; audience: number }[];
+  /** Week by week, per platform. Weeks start Monday, IST. */
+  weekly: { week: string; platform: string; posts: number; interactions: number; views: number; reach: number }[];
   /** Posts left out of comparisons because too few people saw them for a ratio to mean anything. */
   lowAudience: number;
-  byPlatform: { platform: string; posts: number; views: number; interactions: number; medianEngagement: number | null }[];
+  byPlatform: PlatformSummary[];
+  /** All platforms together (insights are each platform's own, labelled with the platform). */
   segments: Segment[];
   insights: Insight[];
   top: ScoredPost[];
   bottom: ScoredPost[];
+  /** The same, one platform at a time. */
+  perPlatform: Record<string, SocialView>;
 }
 
 // ------------------------------------------------------------- tagging
@@ -140,23 +151,21 @@ export const MIN_AUDIENCE = 50;
 /** Groups smaller than this are reported, but marked as an early signal. */
 const SOLID_POSTS = 8;
 const fmt = (x: number) => `${x >= 10 ? Math.round(x) : x.toFixed(1)}×`;
-const early = (s: { posts: number }) => s.posts < SOLID_POSTS ? 'Early signal. ' : '';
 const pctOf = (x: number) => `${Math.round(x * 100)}%`;
 
-export function analyzeSocial(industry: Industry, accounts: SocialAccount[], posts: SocialPost[], now: Date, windowDays = 180): SocialAnalysis {
-  const since = now.getTime() - windowDays * 86_400_000;
-  const inWindow = posts.filter(p => p.postedAt.getTime() >= since);
-  const acc = new Map(accounts.map(a => [a.id, a]));
-  const scored0 = inWindow.map(p => score(industry, p, acc.get(p.accountId)?.followers));
-  // lift: engagement relative to the same account's median, so platforms are comparable
-  const accMedian = new Map<string, number>();
-  for (const a of accounts) accMedian.set(a.id, median(scored0.filter(p => p.accountId === a.id && p.engagement !== null).map(p => p.engagement!)));
-  const scored: ScoredPost[] = scored0.map(p => {
-    const m = accMedian.get(p.accountId) ?? 0;
-    return { ...p, lift: p.engagement !== null && m > 0 ? p.engagement / m : null };
-  });
-  const rated = scored.filter(p => p.lift !== null);
+const PLATFORM_NAME: Record<string, string> = { instagram: 'Instagram', facebook: 'Facebook', youtube: 'YouTube', linkedin: 'LinkedIn' };
 
+/** "60% more engagement than your typical Instagram post", "2.3× the engagement of…", "40% less engagement than…" */
+export function liftPhrase(lift: number, platform: string | null): string {
+  const typical = platform ? `your typical ${PLATFORM_NAME[platform] ?? platform} post` : 'your typical post';
+  if (lift >= 2) return `${fmt(lift)} the engagement of ${typical}`;
+  const d = Math.round(Math.abs(lift - 1) * 100);
+  if (d < 5) return `about the same engagement as ${typical}`;
+  return `${d}% ${lift >= 1 ? 'more' : 'less'} engagement than ${typical}`;
+}
+
+function viewOf(industry: Industry, rated: ScoredPost[], platform: string | null): SocialView {
+  const pl = platform ? PLATFORM_NAME[platform] ?? platform : null;
   const groups: [Dimension, (p: ScoredPost) => string[]][] = [
     ['theme', p => p.themes], ['format', p => [p.format]], ['time', p => [p.timeBand]], ['day', p => [p.dayType]],
     ['language', p => [p.language]], ['length', p => [p.lengthBand]],
@@ -174,51 +183,71 @@ export function analyzeSocial(industry: Industry, accounts: SocialAccount[], pos
       });
     }
   }
-
   const insights: Insight[] = [];
+  const of = pl ? ` ${pl}` : '';
   const meaningful = segments.filter(s => !(s.dimension === 'theme' && s.key === 'other'));
   const best = (d: Dimension) => meaningful.filter(s => s.dimension === d).sort((a, b) => b.lift - a.lift);
   for (const s of meaningful) {
-    if (s.lift >= 1.3 && s.posts >= MIN_POSTS) insights.push({ kind: 'working', dimension: s.dimension, key: s.key, strength: s.lift * Math.sqrt(s.posts),
-      title: `${s.label} get ${fmt(s.lift)} your usual engagement`, detail: `${early(s)}Across ${s.posts} posts. ${s.share < 0.2 ? `Only ${pctOf(s.share)} of what you post, so there is room to do more.` : `${pctOf(s.share)} of what you post.`}` });
-    if (s.lift <= 0.75 && s.posts >= MIN_POSTS) insights.push({ kind: 'not_working', dimension: s.dimension, key: s.key, strength: (1 / Math.max(s.lift, 0.05)) * Math.sqrt(s.posts),
-      title: `${s.label} get ${fmt(s.lift)} your usual engagement`, detail: `${early(s)}Across ${s.posts} posts, ${pctOf(s.share)} of your output.${s.share >= 0.25 ? ' A large share of effort going to your weakest content.' : ''}` });
+    const base = { dimension: s.dimension, key: s.key, platform: platform ?? undefined, lift: s.lift, posts: s.posts, early: s.posts < SOLID_POSTS };
+    if (s.lift >= 1.3) insights.push({ ...base, kind: 'working', strength: s.lift * Math.sqrt(s.posts),
+      title: `${s.label} get ${liftPhrase(s.lift, platform)}`,
+      detail: `Based on ${s.posts}${of} posts, ${pctOf(s.share)} of what you post${pl ? ` there` : ''}.${s.share < 0.2 ? ' There is room to do more.' : ''}` });
+    if (s.lift <= 0.75) insights.push({ ...base, kind: 'not_working', strength: (1 / Math.max(s.lift, 0.05)) * Math.sqrt(s.posts),
+      title: `${s.label} get ${liftPhrase(s.lift, platform)}`,
+      detail: `Based on ${s.posts}${of} posts, ${pctOf(s.share)} of what you post${pl ? ' there' : ''}.${s.share >= 0.25 ? ' A large share of your effort is going here.' : ''}` });
   }
-  // what to try next: concrete shifts derived from the strongest contrasts
-  const theme = best('theme'), format = best('format'), time = best('time'), lang = best('language');
+  const theme = best('theme'), time = best('time'), lang = best('language');
   const top = theme.find(t => t.posts >= 6);
-  if (top && top.lift >= 1.3 && top.share < 0.3) insights.push({ kind: 'try', dimension: 'theme', key: top.key, strength: 50 + top.lift,
-    title: `Make ${top.label.toLowerCase()} at least 1 in 4 posts`, detail: `They are ${pctOf(top.share)} of your posts today and your strongest theme at ${fmt(top.lift)}.` });
-  // format advice compares formats on the same platform (text posts on Facebook vs shorts on YouTube is not a fair fight)
-  let fmtPick: { hi: Segment; lo: Segment; ratio: number; platform: string } | null = null;
-  for (const pl of new Set(rated.map(p => p.platform))) {
-    const fs = new Map<string, number[]>();
-    rated.filter(p => p.platform === pl).forEach(p => fs.set(p.format, [...(fs.get(p.format) ?? []), p.lift!]));
-    const segs = [...fs.entries()].filter(([, ls]) => ls.length >= MIN_POSTS).map(([k, ls]) => ({ key: k, lift: median(ls) })).sort((a, b) => b.lift - a.lift);
-    if (segs.length < 2) continue;
-    const ratio = segs[0]!.lift / Math.max(segs[segs.length - 1]!.lift, 0.01);
-    if (ratio >= 1.5 && (!fmtPick || ratio > fmtPick.ratio)) {
-      const mk = (x: { key: string; lift: number }): Segment => ({ dimension: 'format', key: x.key, label: LABELS.format[x.key] ?? x.key, posts: 0, share: 0, lift: x.lift, medianEngagement: 0 });
-      fmtPick = { hi: mk(segs[0]!), lo: mk(segs[segs.length - 1]!), ratio, platform: pl };
+  if (top && top.lift >= 1.3 && top.share < 0.3) insights.push({ kind: 'try', dimension: 'theme', key: top.key, platform: platform ?? undefined, lift: top.lift, posts: top.posts, strength: 50 + top.lift,
+    title: `${pl ? `On ${pl}, make` : 'Make'} ${top.label.toLowerCase()} at least 1 in 4 posts`,
+    detail: `They are ${pctOf(top.share)} of your${of} posts today and get ${liftPhrase(top.lift, platform)}.` });
+  // format advice only within one platform (a text post on Facebook and a short on YouTube are not a fair fight)
+  if (platform) {
+    const fs = best('format');
+    if (fs.length >= 2) {
+      const hi = fs[0]!, lo = fs[fs.length - 1]!, ratio = hi.lift / Math.max(lo.lift, 0.01);
+      if (ratio >= 1.5) insights.push({ kind: 'try', dimension: 'format', key: hi.key, platform, lift: hi.lift, posts: hi.posts, strength: 40 + ratio,
+        title: `On ${pl}, post more ${hi.label.toLowerCase()} and fewer ${lo.label.toLowerCase()}`,
+        detail: `${hi.label} get ${fmt(ratio)} the engagement of ${lo.label.toLowerCase()} on ${pl} (${hi.posts} and ${lo.posts} posts).` });
     }
   }
-  if (fmtPick) {
-    const plName = { instagram: 'Instagram', facebook: 'Facebook', youtube: 'YouTube', linkedin: 'LinkedIn' }[fmtPick.platform] ?? fmtPick.platform;
-    insights.push({ kind: 'try', dimension: 'format', key: fmtPick.hi.key, strength: 40 + fmtPick.ratio,
-      title: `On ${plName}, turn ${fmtPick.lo.label.toLowerCase()} into ${fmtPick.hi.label.toLowerCase()}`, detail: `${fmtPick.hi.label} get ${fmt(fmtPick.ratio)} the engagement of ${fmtPick.lo.label.toLowerCase()} there.` });
-  }
-  if (time.length >= 2 && time[0]!.lift >= 1.15) {
-    insights.push({ kind: 'try', dimension: 'time', key: time[0]!.key, strength: 30 + time[0]!.lift,
-      title: `Schedule more posts for ${time[0]!.label.toLowerCase().replace(/ \(.*\)/, '')}`, detail: `${time[0]!.label} perform at ${fmt(time[0]!.lift)}; ${time[time.length - 1]!.label.toLowerCase()} at ${fmt(time[time.length - 1]!.lift)}.` });
-  }
+  if (time.length >= 2 && time[0]!.lift >= 1.15) insights.push({ kind: 'try', dimension: 'time', key: time[0]!.key, platform: platform ?? undefined, lift: time[0]!.lift, posts: time[0]!.posts, strength: 30 + time[0]!.lift,
+    title: `${pl ? `On ${pl}, schedule` : 'Schedule'} more posts for ${time[0]!.label.toLowerCase().replace(/ \(.*\)/, '')}`,
+    detail: `${time[0]!.label}: ${liftPhrase(time[0]!.lift, platform)}. ${time[time.length - 1]!.label}: ${liftPhrase(time[time.length - 1]!.lift, platform)}.` });
   const regional = lang.find(l => l.key !== 'English' && l.lift >= 1.2);
-  if (regional) insights.push({ kind: 'try', dimension: 'language', key: regional.key, strength: 35 + regional.lift,
-    title: `Test more ${regional.key} captions`, detail: `${regional.posts} posts in ${regional.key} reached ${fmt(regional.lift)} your usual engagement. Run a two-week test with one in three posts in ${regional.key}.` });
-  void format;
-  if (!insights.some(i => i.kind === 'try') && rated.length >= 6) insights.push({ kind: 'try', strength: 1, title: 'Run a two-week content test', detail: 'No clear winner yet. Alternate two themes on the same days and times so the comparison is fair.' });
+  if (regional) insights.push({ kind: 'try', dimension: 'language', key: regional.key, platform: platform ?? undefined, lift: regional.lift, posts: regional.posts, strength: 35 + regional.lift,
+    title: `${pl ? `On ${pl}, test` : 'Test'} more ${regional.key} captions`,
+    detail: `${regional.posts} posts in ${regional.key} got ${liftPhrase(regional.lift, platform)}. Try one in three posts in ${regional.key} for two weeks.` });
   insights.sort((a, b) => b.strength - a.strength);
+  return {
+    platform, rated: rated.length, segments: segments.sort((a, b) => b.lift - a.lift), insights,
+    top: [...rated].sort((a, b) => b.lift! - a.lift!).slice(0, 6),
+    bottom: [...rated].sort((a, b) => a.lift! - b.lift!).slice(0, 6),
+  };
+}
 
+export function analyzeSocial(industry: Industry, accounts: SocialAccount[], posts: SocialPost[], now: Date, windowDays = 180): SocialAnalysis {
+  const since = now.getTime() - windowDays * 86_400_000;
+  const inWindow = posts.filter(p => p.postedAt.getTime() >= since);
+  const acc = new Map(accounts.map(a => [a.id, a]));
+  const scored0 = inWindow.map(p => score(industry, p, acc.get(p.accountId)?.followers));
+  // lift: engagement relative to the same account's median, so platforms and account sizes are comparable
+  const accMedian = new Map<string, number>();
+  for (const a of accounts) accMedian.set(a.id, median(scored0.filter(p => p.accountId === a.id && p.engagement !== null).map(p => p.engagement!)));
+  const scored: ScoredPost[] = scored0.map(p => {
+    const m = accMedian.get(p.accountId) ?? 0;
+    return { ...p, lift: p.engagement !== null && m > 0 ? p.engagement / m : null };
+  });
+  const rated = scored.filter(p => p.lift !== null);
   const platforms = [...new Set(scored.map(p => p.platform))];
+
+  const perPlatform: Record<string, SocialView> = {};
+  for (const pl of platforms) perPlatform[pl] = viewOf(industry, rated.filter(p => p.platform === pl), pl);
+  const all = viewOf(industry, rated, null);
+  // across platforms, the advice is each platform's own (labelled), strongest first
+  const insights = Object.values(perPlatform).flatMap(v => v.insights).sort((a, b) => b.strength - a.strength);
+  if (!insights.some(i => i.kind === 'try') && rated.length >= 6) insights.push({ kind: 'try', strength: 1, title: 'Run a two-week content test', detail: 'No clear winner yet. Alternate two themes on the same days and times so the comparison is fair.' });
+
   return {
     windowDays, posts: scored.length,
     lowAudience: scored.filter(p => p.engagement === null).length,
@@ -226,12 +255,12 @@ export function analyzeSocial(industry: Industry, accounts: SocialAccount[], pos
     byPlatform: platforms.map(pl => {
       const ps = scored.filter(p => p.platform === pl);
       const es = ps.filter(p => p.engagement !== null).map(p => p.engagement!);
-      return { platform: pl, posts: ps.length, views: ps.reduce((s, p) => s + n0(p.views), 0), interactions: ps.reduce((s, p) => s + p.interactions, 0), medianEngagement: es.length ? median(es) : null };
+      const withViews = ps.filter(p => typeof p.views === 'number'), withReach = ps.filter(p => typeof p.reach === 'number');
+      return { platform: pl, posts: ps.length, interactions: ps.reduce((s, p) => s + p.interactions, 0),
+        views: withViews.length ? withViews.reduce((s, p) => s + n0(p.views), 0) : null, reach: withReach.length ? withReach.reduce((s, p) => s + n0(p.reach), 0) : null,
+        viewsPosts: withViews.length, reachPosts: withReach.length, medianEngagement: es.length ? median(es) : null };
     }),
-    segments: segments.sort((a, b) => b.lift - a.lift),
-    insights,
-    top: [...rated].sort((a, b) => b.lift! - a.lift!).slice(0, 5),
-    bottom: [...rated].sort((a, b) => a.lift! - b.lift!).slice(0, 5),
+    segments: all.segments, insights, top: all.top, bottom: all.bottom, perPlatform,
   };
 }
 
@@ -246,8 +275,8 @@ function weeklyOf(posts: ScoredPost[]): SocialAnalysis['weekly'] {
   const m = new Map<string, SocialAnalysis['weekly'][number]>();
   for (const p of posts) {
     const week = weekOf(p.postedAt), k = `${week}|${p.platform}`;
-    const w = m.get(k) ?? { week, platform: p.platform, posts: 0, interactions: 0, audience: 0 };
-    w.posts++; w.interactions += p.interactions; w.audience += n0(p.reach ?? p.views);
+    const w = m.get(k) ?? { week, platform: p.platform, posts: 0, interactions: 0, views: 0, reach: 0 };
+    w.posts++; w.interactions += p.interactions; w.views += n0(p.views); w.reach += n0(p.reach);
     m.set(k, w);
   }
   return [...m.values()].sort((a, b) => a.week.localeCompare(b.week) || a.platform.localeCompare(b.platform));

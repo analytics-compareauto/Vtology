@@ -61,7 +61,11 @@ export function DataView({ data, workspaceId, reload, notify }: { data: Workspac
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const stats = me.lastRun?.stats as PipelineStats | undefined;
+  let raw = me.lastRun?.stats as Partial<PipelineStats> | string | null | undefined;
+  if (typeof raw === 'string') { try { raw = JSON.parse(raw) as Partial<PipelineStats>; } catch { raw = {}; } }
+  if (me.lastRun && !raw) raw = {};
+  // a run that ended early can store partial stats; never let a missing number break the page
+  const stats = raw && typeof raw === 'object' ? { records: 0, parties: 0, newParties: 0, heldForReview: 0, reviewItems: 0, journeysLinked: 0, findings: 0, ...raw } as PipelineStats : undefined;
   const spec = CANONICAL[entity];
 
   async function run() {

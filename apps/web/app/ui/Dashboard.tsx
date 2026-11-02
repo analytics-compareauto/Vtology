@@ -11,6 +11,7 @@ import { Approvals } from './views/Approvals';
 import { DataView } from './views/DataView';
 import { Social } from './views/Social';
 import { ActionDialog, type ActionDraft } from './ActionDialog';
+import { ErrorBoundary } from './ErrorBoundary';
 import { BrandMark, IconApprovals, IconData, IconFindings, IconJourneys, IconOverview, IconPartners, IconSocial } from './icons';
 
 export interface WorkspaceData { me: Me; journeys: Journey[]; partners: PartnerScore[]; findings: Finding[]; actions: ActionRun[] }
@@ -130,6 +131,7 @@ export function Dashboard({ workspaceId, email, onSwitch, onSignOut }: { workspa
               <p className="muted">{current.lead} <span className="small">As {ROLES[me.role].label.toLowerCase()} you see {scope}.</span></p>
             </div>
           </div>
+          <ErrorBoundary resetKey={tab}>
           {tab === 'overview' && <Overview data={data} go={go} />}
           {tab === 'journeys' && <Journeys data={data} act={act} />}
           {tab === 'findings' && <Findings data={data} act={act} />}
@@ -137,6 +139,7 @@ export function Dashboard({ workspaceId, email, onSwitch, onSignOut }: { workspa
           {tab === 'social' && (['partner_user', 'relationship_manager'].includes(me.role) ? <div className="empty">Social insights are not part of your role’s view.</div> : <Social data={data} workspaceId={workspaceId} notify={setToast} />)}
           {tab === 'approvals' && <Approvals data={data} workspaceId={workspaceId} reload={load} notify={setToast} />}
           {tab === 'data' && <DataView data={data} workspaceId={workspaceId} reload={load} notify={setToast} />}
+          </ErrorBoundary>
         </main>
       </div>
       {draft && <ActionDialog draft={draft} data={data} workspaceId={workspaceId} onClose={changed => { setDraft(null); if (changed) load(); }} notify={setToast} />}
