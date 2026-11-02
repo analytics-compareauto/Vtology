@@ -34,6 +34,20 @@ interface SyncResult { accounts: AccountSnap[]; posts: PostSnap[]; campaigns: Ca
 
 const redirect = (cfg: SocialConfig, p: ProviderId) => `${cfg.publicUrl.replace(/\/$/, '')}/api/social/callback/${p}`;
 
+/** Run fn over items, n at a time, stopping new work once the deadline passes. Returns how many were skipped. */
+async function pool<T>(items: T[], n: number, deadline: number, fn: (x: T) => Promise<void>): Promise<number> {
+  let i = 0, skipped = 0;
+  const worker = async () => {
+    while (i < items.length) {
+      const x = items[i++]!;
+      if (Date.now() > deadline) { skipped++; continue; }
+      await fn(x);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+  return skipped;
+}
+
 class PlatformError extends Error { constructor(public status: number, message: string, public expired = false) { super(message); } }
 
 async function getJson<T>(f: typeof fetch, url: string, init?: RequestInit): Promise<T> {
@@ -70,7 +84,7 @@ const meta = {
       tokens: { accessToken: long.access_token, expiresAt: long.expires_in ? new Date(Date.now() + long.expires_in * 1000) : null } as Tokens,
     };
   },
-  async sync(cfg: SocialConfig, f: typeof fetch, t: Tokens, since: Date): Promise<SyncResult> {
+  async sync(cfg: SocialConfig, f: typeof fetch, t: Tokens, since: Date, opts: { fresh: Set<string>; deadline: number }): Promise<SyncResult> {
     const G = meta.graph(cfg), warnings: string[] = [];
     const accounts: AccountSnap[] = [], posts: PostSnap[] = [], campaigns: CampaignSnap[] = [];
     const sinceUnix = Math.floor(since.getTime() / 1000);
@@ -79,6 +93,7 @@ const meta = {
       `${G}/me/accounts?fields=id,name,username,link,followers_count,fan_count,access_token,instagram_business_account{id,username,name,followers_count,media_count}&limit=100&access_token=${encodeURIComponent(t.accessToken)}`);
     if (!pages.data.length) warnings.push('No Facebook Pages were shared during approval. Reconnect and tick the brand’s Page (and its Instagram account).');
 
+    const igPosts: { snap: PostSnap; tok: string }[] = [];
     for (const pg of pages.data) {
       const tok = encodeURIComponent(pg.access_token);
       accounts.push({ platform: 'facebook', externalId: pg.id, handle: pg.username ?? null, name: pg.name, followers: pg.followers_count ?? pg.fan_count ?? null, profileUrl: pg.link ?? `https://facebook.com/${pg.id}` });
@@ -109,23 +124,30 @@ const meta = {
             const snap: PostSnap = { platform: 'instagram', accountExternalId: ig.id, externalId: m.id, postedAt: m.timestamp, caption: m.caption ?? null, permalink: m.permalink ?? null,
               format: m.media_product_type === 'REELS' ? 'reel' : m.media_type === 'CAROUSEL_ALBUM' ? 'carousel' : m.media_type === 'VIDEO' ? 'video' : 'image',
               likes: m.like_count ?? null, comments: m.comments_count ?? null };
-            // per-post insights; the available metrics differ by post type and change over time, so fall back gracefully
-            for (const metrics of ['reach,saved,shares,views', 'reach,saved,shares', 'reach']) {
-              try {
-                const ins = await getJson<{ data: { name: string; values?: { value: number }[]; total_value?: { value: number } }[] }>(f, `${G}/${m.id}/insights?metric=${metrics}&access_token=${tok}`);
-                for (const d of ins.data) {
-                  const v = d.values?.[0]?.value ?? d.total_value?.value ?? null;
-                  if (d.name === 'reach') snap.reach = v; else if (d.name === 'saved') snap.saves = v; else if (d.name === 'shares') snap.shares = v; else if (d.name === 'views') snap.views = v;
-                }
-                break;
-              } catch { /* try a smaller metric set */ }
-            }
-            posts.push(snap);
+            igPosts.push({ snap, tok });
           }
           url = r.paging?.next ?? null;
         }
       } catch (e) { warnings.push(`Instagram posts for @${ig.username ?? ig.id}: ${(e as Error).message}`); }
     }
+
+    // per-post Instagram insights, 10 at a time; posts refreshed in the last day keep their stored numbers.
+    // The available metrics differ by post type and change over time, so fall back gracefully.
+    const needInsights = igPosts.filter(p => !opts.fresh.has(p.snap.externalId));
+    const skipped = await pool(needInsights, 10, opts.deadline, async ({ snap, tok }) => {
+      for (const metrics of ['reach,saved,shares,views', 'reach,saved,shares', 'reach']) {
+        try {
+          const ins = await getJson<{ data: { name: string; values?: { value: number }[]; total_value?: { value: number } }[] }>(f, `${G}/${snap.externalId}/insights?metric=${metrics}&access_token=${tok}`);
+          for (const d of ins.data) {
+            const v = d.values?.[0]?.value ?? d.total_value?.value ?? null;
+            if (d.name === 'reach') snap.reach = v; else if (d.name === 'saved') snap.saves = v; else if (d.name === 'shares') snap.shares = v; else if (d.name === 'views') snap.views = v;
+          }
+          break;
+        } catch { /* try a smaller metric set */ }
+      }
+    });
+    posts.push(...igPosts.map(p => p.snap));
+    if (skipped) warnings.push(`Reach and saves for ${skipped} older Instagram posts will be filled in on the next sync.`);
 
     // lead ads: each submitted form becomes a customer record and an inquiry journey tagged to its campaign
     const leads: LeadSnap[] = [];
@@ -273,8 +295,8 @@ export async function finishConnect(deps: Deps, provider: string, params: URLSea
        on conflict (tenant_id, provider) do update set label = excluded.label, scopes = excluded.scopes, status = 'active', connected_by = excluded.connected_by, connected_at = now(), last_error = null
        returning id`, [st.tenantId, provider, got.label, got.scopes, st.userId]);
     await saveTokens(deps.db.admin, secret, conn!.id, st.tenantId, got.tokens);
-    const r = await syncConnection(deps, st.tenantId, conn!.id);
-    return back({ social: 'connected', provider, posts: String(r.posts), accounts: String(r.accounts) });
+    // the first sync runs as its own request from the Social tab, so this redirect is never held up
+    return back({ social: 'connected', provider, sync: '1' });
   } catch (e) {
     return back({ social: 'error', provider, message: e instanceof HttpError ? e.message : `The platform refused the connection: ${(e as Error).message}`.slice(0, 300) });
   }
@@ -300,7 +322,11 @@ export async function syncConnection(deps: Deps, tenantId: string, connectionId:
   const f = deps.fetch ?? fetch;
   let r: SyncResult;
   try {
-    r = c.provider === 'meta' ? await meta.sync(deps.social!, f, tokens, since) : await youtube.sync(deps.social!, f, tokens, since, now);
+    const fresh = new Set((await deps.db.admin.query<{ external_id: string }>(
+      `select p.external_id from vt.social_posts p join vt.social_accounts a on a.id = p.account_id
+        where p.tenant_id = $1 and a.connection_id = $2 and p.reach is not null and p.metrics_at > now() - interval '20 hours'`, [tenantId, connectionId])).map(x => x.external_id));
+    const deadline = Date.now() + (deps.syncBudgetMs ?? 35_000);
+    r = c.provider === 'meta' ? await meta.sync(deps.social!, f, tokens, since, { fresh, deadline }) : await youtube.sync(deps.social!, f, tokens, since, now);
   } catch (e) {
     const expired = e instanceof PlatformError && e.expired;
     await deps.db.admin.query(`update vt.social_connections set status = $3, last_error = $4 where id = $1 and tenant_id = $2`, [connectionId, tenantId, expired ? 'expired' : 'error', (e as Error).message.slice(0, 500)]);
@@ -329,8 +355,8 @@ export async function syncConnection(deps: Deps, tenantId: string, connectionId:
         `insert into vt.social_posts (tenant_id, account_id, external_id, posted_at, format, caption, permalink, duration_s, views, reach, likes, comments, shares, saves, watch_minutes, avg_view_pct, metrics_at)
          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, now())
          on conflict (tenant_id, account_id, external_id) do update set format = excluded.format, caption = excluded.caption, permalink = excluded.permalink, duration_s = excluded.duration_s,
-           views = excluded.views, reach = excluded.reach, likes = excluded.likes, comments = excluded.comments, shares = excluded.shares, saves = excluded.saves,
-           watch_minutes = excluded.watch_minutes, avg_view_pct = excluded.avg_view_pct, metrics_at = now()`,
+           views = coalesce(excluded.views, vt.social_posts.views), reach = coalesce(excluded.reach, vt.social_posts.reach), likes = coalesce(excluded.likes, vt.social_posts.likes), comments = coalesce(excluded.comments, vt.social_posts.comments), shares = coalesce(excluded.shares, vt.social_posts.shares), saves = coalesce(excluded.saves, vt.social_posts.saves),
+           watch_minutes = coalesce(excluded.watch_minutes, vt.social_posts.watch_minutes), avg_view_pct = coalesce(excluded.avg_view_pct, vt.social_posts.avg_view_pct), metrics_at = now()`,
         [tenantId, accountId, p.externalId, p.postedAt, p.format, p.caption ?? null, p.permalink ?? null, p.durationS ?? null, p.views ?? null, p.reach ?? null, p.likes ?? null,
          p.comments ?? null, p.shares ?? null, p.saves ?? null, p.watchMinutes ?? null, p.avgViewPct ?? null]);
     }
@@ -339,7 +365,9 @@ export async function syncConnection(deps: Deps, tenantId: string, connectionId:
        on conflict (tenant_id, external_code) do update set name = excluded.name, channel = excluded.channel, start_date = excluded.start_date, end_date = excluded.end_date,
          spend_inr = excluded.spend_inr, platform_reported_conversions = excluded.platform_reported_conversions`,
       [tenantId, c2.externalCode, c2.name, c2.channel, c2.startDate ?? null, c2.endDate ?? null, c2.spendInr, c2.conversions]);
+    const writeUntil = Date.now() + 15_000;
     for (const l of r.leads ?? []) {
+      if (Date.now() > writeUntil) { r.warnings.push('More lead-form leads are waiting; they will be added on the next sync.'); break; }
       const ref = `metalead:${l.externalId}`;
       const exists = await sql.query(`select 1 from vt.source_records where tenant_id = $1 and source_system = 'Meta lead ads' and external_id = $2 limit 1`, [tenantId, ref]);
       if (exists.length) continue;

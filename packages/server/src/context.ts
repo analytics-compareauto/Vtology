@@ -23,6 +23,8 @@ export interface Deps {
   social?: import('./social').SocialConfig;
   /** Shared secret for the daily scheduled job (Vercel sends it as a Bearer token). */
   cronSecret?: string;
+  /** How long one sync may spend fetching per-post insights before saving what it has (default 35 s). */
+  syncBudgetMs?: number;
   fetch?: typeof fetch;
   now?: () => Date;
 }

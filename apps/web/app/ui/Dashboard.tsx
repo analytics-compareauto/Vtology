@@ -52,7 +52,7 @@ export function Dashboard({ workspaceId, email, onSwitch, onSignOut }: { workspa
     const st = q.get('social');
     if (!st) return;
     const name = q.get('provider') === 'youtube' ? 'YouTube' : 'Instagram and Facebook';
-    setToast(st === 'connected' ? `${name} connected: ${q.get('accounts') ?? 0} accounts, ${q.get('posts') ?? 0} posts synced.` : `${name} was not connected. ${q.get('message') ?? ''}`);
+    setToast(st === 'connected' ? `${name} connected. Fetching posts and insights now; this can take up to a minute.` : `${name} was not connected. ${q.get('message') ?? ''}`);
     window.history.replaceState(null, '', window.location.pathname);
   }, []);
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 6000); return () => clearTimeout(t); }, [toast]);

@@ -38,7 +38,10 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
     load().then(r => {
       // keep connected accounts fresh: sync in the background if the last sync is over 12 hours old
       const stale = r?.connections.some(c => c.provider !== 'sample' && c.status === 'active' && (!c.last_sync_at || Date.now() - new Date(c.last_sync_at).getTime() > 12 * 3600_000));
-      if (stale && r?.canConnect) api('POST', `${T}/social/sync`).then(() => load()).catch(() => undefined);
+      if (stale && r?.canConnect) {
+        setBusy('sync');
+        api('POST', `${T}/social/sync`).then(() => load()).catch(() => undefined).finally(() => setBusy(null));
+      }
     });
   }, [load, T]);
 
@@ -84,6 +87,7 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
           <h2>Connected accounts</h2>
           {real.length > 0 && <button className="btn" onClick={sync} disabled={busy === 'sync'}>{busy === 'sync' ? 'Syncing…' : 'Sync now'}</button>}
         </div>
+        {busy === 'sync' && <div><div className="progress" /><p className="muted small" style={{ marginTop: 6 }}>Fetching posts, insights, ad campaigns and leads from the connected accounts…</p></div>}
         {sample && <div className="note-box small">This sample workspace shows fictional accounts for {data.me.tenantName}. Connect real accounts in a workspace for your own brand.</div>}
         {!data.me.isDemo && <div className="rows">
           {PROVIDERS.map(p => {

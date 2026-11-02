@@ -124,6 +124,8 @@ describe('social footprint end to end', () => {
     const cb = await call(null, 'GET', `/social/callback/meta?code=CODE&state=${encodeURIComponent(u.searchParams.get('state')!)}`);
     expect(cb.status).toBe(302);
     expect(cb.location).toContain('social=connected');
+    expect(cb.location).toContain('sync=1');            // the redirect never waits for the first sync
+    expect((await call(s.accessToken, 'POST', `/tenants/${real}/social/sync`)).status).toBe(200);
 
     const tok = await db.admin.query<{ access_token_enc: string }>(`select access_token_enc from vt.social_tokens`);
     expect(tok[0]!.access_token_enc).not.toContain('META-LONG-TOKEN');
@@ -156,6 +158,7 @@ describe('social footprint end to end', () => {
     expect(u.searchParams.get('access_type')).toBe('offline');
     const cb = await call(null, 'GET', `/social/callback/youtube?code=G&state=${encodeURIComponent(u.searchParams.get('state')!)}`);
     expect(cb.location).toContain('social=connected');
+    await call(s.accessToken, 'POST', `/tenants/${t!.id}/social/sync`);
     const v = await db.admin.query<{ external_id: string; format: string; views: string; avg_view_pct: string; watch_minutes: string }>(`select external_id, format, views::text as views, avg_view_pct::text as avg_view_pct, watch_minutes::text as watch_minutes from vt.social_posts where external_id like 'V%' order by external_id`);
     expect(v).toEqual([
       { external_id: 'V1', format: 'video', views: '150000', avg_view_pct: '41.5', watch_minutes: '900000' },
@@ -166,6 +169,15 @@ describe('social footprint end to end', () => {
     const sync = await call(s.accessToken, 'POST', `/tenants/${t!.id}/social/sync`);
     expect(sync.body.youtube.posts).toBe(2);
     expect(fetchLog).toContain('https://oauth2.googleapis.com/token');
+  });
+
+  it('keeps stored insights when a sync runs out of time, and fills them in later', async () => {
+    const [t] = await db.admin.query<{ id: string }>(`select id from vt.tenants where name = 'CompareAuto'`);
+    await db.admin.query(`update vt.social_posts set metrics_at = now() - interval '2 days' where external_id in ('M1','M2')`);
+    const r = await call(s.accessToken, 'POST', `/tenants/${t!.id}/social/sync`, undefined, { syncBudgetMs: -1 }); // no time for insights
+    expect(r.body.meta.warnings.join(' ')).toContain('filled in on the next sync');
+    const [m1] = await db.admin.query<{ reach: string }>(`select reach::text as reach from vt.social_posts where external_id = 'M1'`);
+    expect(m1!.reach).toBe('60000'); // not wiped
   });
 
   it('protects the daily job and explains missing setup', async () => {
