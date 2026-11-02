@@ -300,7 +300,7 @@ const meta = {
         competitorResults.push({ ...c, error: null });
       } catch (e) {
         const msg = (e as Error).message;
-        competitorResults.push({ ...c, error: /Invalid user id|cannot be found|does not exist|\(#110\)/i.test(msg) ? `@${c.handle} was not found, or it is a personal account (only business and creator accounts can be compared).` : `Instagram did not return @${c.handle}: ${msg.replace(/https?:\/\/\S+/g, '').slice(0, 220)}` });
+        competitorResults.push({ ...c, error: `${/Invalid user id|cannot be found|does not exist|\(#110\)/i.test(msg) ? `@${c.handle} was not found, or it is a personal account (only business and creator accounts can be compared). ` : ''}Instagram said: ${msg.replace(/https?:\/\/\S+/g, '').slice(0, 220)}` });
       }
     }
     return { accounts, posts, campaigns, leads, warnings, daily, competitors: competitorResults };
