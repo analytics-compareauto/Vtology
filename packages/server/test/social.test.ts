@@ -225,8 +225,25 @@ describe('social footprint end to end', () => {
 
   it('protects the daily job and explains missing setup', async () => {
     expect((await call(null, 'GET', '/cron/social-sync')).status).toBe(401);
-    const ok = await handle(new Request('http://localhost/api/cron/social-sync', { headers: { authorization: 'Bearer cron-test' } }), deps());
-    expect((await ok.json() as any).ok).toBeGreaterThanOrEqual(2);
+    // the daily job: one request per connection, each calling this server back with the internal key
+    await db.admin.query(`update vt.social_connections set last_sync_at = null`);
+    const platforms = fakePlatforms();
+    let selfCalls = 0;
+    const d: any = { ...deps(), fetch: (async (u: string | URL, init?: RequestInit) => {
+      if (String(u).startsWith('https://vtology.vercel.app/api/cron/')) { selfCalls++; return handle(new Request(String(u), init), d); }
+      return platforms(u as string, init);
+    }) as typeof fetch };
+    const ok = await handle(new Request('http://localhost/api/cron/social-sync', { headers: { authorization: 'Bearer cron-test' } }), d);
+    const res = await ok.json() as any;
+    expect(res.started).toBeGreaterThanOrEqual(2);
+    expect(res.ok).toBe(res.started);
+    expect(selfCalls).toBe(res.started);
+    // run again straight away: everything was just synced, so nothing to do
+    expect((await (await handle(new Request('http://localhost/api/cron/social-sync', { headers: { authorization: 'Bearer cron-test' } }), d)).json() as any).started).toBe(0);
+    // a made-up internal key is refused; without CRON_SECRET only Vercel's scheduler may start it
+    expect((await handle(new Request('http://localhost/api/cron/social-sync?connection=x&tenant=y', { method: 'POST', headers: { 'x-vt-internal': 'guess' } }), d)).status).toBe(401);
+    expect((await handle(new Request('http://localhost/api/cron/social-sync'), { ...d, cronSecret: undefined })).status).toBe(401);
+    expect((await handle(new Request('http://localhost/api/cron/social-sync', { headers: { 'user-agent': 'vercel-cron/1.0' } }), { ...d, cronSecret: undefined })).status).toBe(200);
     const noApp = await call(s.accessToken, 'POST', `/tenants/${ws}/social/connect/meta`, undefined, { social: { publicUrl: 'https://x' } });
     expect(noApp.body.error).toContain('META_APP_ID');
     const noKey = await call(s.accessToken, 'POST', `/tenants/${ws}/social/connect/meta`, undefined, { secretKey: undefined });

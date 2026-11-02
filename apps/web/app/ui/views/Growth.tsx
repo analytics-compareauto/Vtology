@@ -5,7 +5,7 @@ import type { WorkspaceData } from '../Dashboard';
 import { api, ApiError } from '../api';
 import { change, compact, num, pct } from '../format';
 import { BarChart, LineChart } from '../charts';
-import { IconImage, IconPlay, IconSpark } from '../icons';
+import { IconImage, IconPlay, IconRefresh, IconSpark } from '../icons';
 
 interface Competitor { id: string; platform: string; handle: string; account_id: string | null; last_error: string | null; added_at: string }
 interface GrowthData { canEdit: boolean; connected: string[]; isSample: boolean; accounts: { id: string; platform: string; name: string; handle: string | null; followers: number | null; isCompetitor: boolean }[]; competitors: Competitor[]; report: GrowthReport }
@@ -24,6 +24,7 @@ export function Growth({ data, workspaceId, notify }: { data: WorkspaceData; wor
   const [period, setPeriod] = useState<Period>('month');
   const [platform, setPlatform] = useState<string>('all');
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const T = `/tenants/${workspaceId}`;
 
   const load = useCallback(() => {
@@ -34,6 +35,17 @@ export function Growth({ data, workspaceId, notify }: { data: WorkspaceData; wor
       .finally(() => setLoading(false));
   }, [T, period, platform]);
   useEffect(() => { load(); }, [load]);
+
+  async function syncNow() {
+    setSyncing(true);
+    try {
+      const r = await api<Record<string, { posts?: number; error?: string }>>('POST', `${T}/social/sync`);
+      const bad = Object.entries(r).filter(([, x]) => x.error).map(([p, x]) => `${p}: ${x.error}`);
+      notify(bad.length ? `Synced with problems. ${bad.join('; ')}` : 'Synced: your accounts and competitors are up to date.');
+      await load();
+    } catch (e) { notify(e instanceof ApiError ? e.message : 'Sync failed.'); }
+    finally { setSyncing(false); }
+  }
 
   if (error) return <div className="error-box" role="alert">{error}</div>;
   if (!g) return <div className="progress" />;
@@ -66,8 +78,12 @@ export function Growth({ data, workspaceId, notify }: { data: WorkspaceData; wor
             {PERIODS.map(x => <button key={x.id} aria-pressed={period === x.id} onClick={() => setPeriod(x.id)}>{x.label}</button>)}
           </div>
         </div>
-        <button className="btn" onClick={() => window.print()}>Download report (PDF)</button>
+        <div className="toolbar">
+          {g.connected.length > 0 && !g.isSample && <button className="btn" onClick={syncNow} disabled={syncing} title="Your accounts and every competitor. Also runs on its own every morning."><IconRefresh />{syncing ? 'Syncing… (up to a minute)' : 'Sync now'}</button>}
+          <button className="btn" onClick={() => window.print()}>Download report (PDF)</button>
+        </div>
       </div>
+      {syncing && <div className="no-print"><div className="progress" /></div>}
 
       <div className="print-only" style={{ display: 'none' }}>
         <h1>{data.me.tenantName}: growth report</h1>
@@ -355,7 +371,7 @@ function Competitors({ g, workspaceId, notify, reload }: { g: GrowthData; worksp
 
   return (
     <section className="panel no-print">
-      <div className="panel-head"><div><h2>Competitors you track</h2><p>Up to 10 per platform. Instagram accounts must be business or creator accounts (most brands are). Numbers refresh daily.</p></div></div>
+      <div className="panel-head"><div><h2>Competitors you track</h2><p>Up to 10 per platform. Instagram accounts must be business or creator accounts (most brands are). Their numbers update on their own every morning (around 6 am IST) and whenever you press Sync now; follower counts are recorded each day to build growth history.</p></div></div>
       {g.competitors.length === 0 ? <p className="muted small" style={{ marginBottom: 14 }}>None yet.</p> : (
         <div className="rows" style={{ marginBottom: 14 }}>
           {g.competitors.map(c => {

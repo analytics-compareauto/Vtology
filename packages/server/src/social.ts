@@ -274,7 +274,7 @@ const meta = {
     // account's followers and recent posts (likes and comments), through the brand's own access
     for (const c of opts.competitors.filter(x => x.platform === 'instagram')) {
       if (!igForDiscovery) { competitorResults.push({ ...c, error: 'Connect the brand’s own Instagram first; competitors are looked up through it.' }); continue; }
-      if (Date.now() > opts.deadline + 10_000) { competitorResults.push({ ...c, error: 'Will update on the next sync.' }); continue; }
+      if (Date.now() > opts.deadline + 10_000) { competitorResults.push({ ...c, error: null }); continue; } // keeps last numbers; next sync updates
       try {
         // fewer fields on each retry: some accounts or app setups refuse picture links
         const mediaFields = ['id,caption,like_count,comments_count,timestamp,media_type,media_product_type,permalink,media_url,thumbnail_url', 'id,caption,like_count,comments_count,timestamp,media_type,media_product_type,permalink', 'id,caption,like_count,comments_count,timestamp,media_type,permalink'];
@@ -330,7 +330,7 @@ const youtube = {
       tokens: { accessToken: t.access_token, refreshToken: t.refresh_token ?? null, expiresAt: new Date(Date.now() + (t.expires_in ?? 3600) * 1000) } as Tokens,
     };
   },
-  async sync(cfg: SocialConfig, f: typeof fetch, t0: Tokens, since: Date, now: Date, competitors: { platform: string; handle: string }[] = []): Promise<SyncResult> {
+  async sync(cfg: SocialConfig, f: typeof fetch, t0: Tokens, since: Date, now: Date, competitors: { platform: string; handle: string }[] = [], deadline = Date.now() + 35_000): Promise<SyncResult> {
     let t = t0, refreshed: Tokens | undefined;
     if (t.refreshToken && (!t.expiresAt || t.expiresAt.getTime() - 60_000 < Date.now())) {
       const r = await youtube.token(cfg, f, { refresh_token: t.refreshToken, grant_type: 'refresh_token' });
@@ -376,6 +376,7 @@ const youtube = {
     // competitors on YouTube: public channel and video statistics
     const competitorResults: CompetitorResult[] = [];
     for (const c of competitors) {
+      if (Date.now() > deadline + 10_000) { competitorResults.push({ ...c, error: null }); continue; } // keeps last numbers; next sync updates
       try {
         const q = /^UC[\w-]{20,}$/.test(c.handle) ? `id=${c.handle}` : `forHandle=${encodeURIComponent('@' + c.handle.replace(/^@/, ''))}`;
         const cc = await getJson<{ items?: { id: string; snippet: { title: string; customUrl?: string }; statistics?: { subscriberCount?: string; videoCount?: string; hiddenSubscriberCount?: boolean }; contentDetails?: { relatedPlaylists?: { uploads?: string } } }[] }>(f,
@@ -472,7 +473,7 @@ export async function syncConnection(deps: Deps, tenantId: string, connectionId:
     const deadline = Date.now() + (deps.syncBudgetMs ?? 35_000);
     const competitors = await deps.db.admin.query<{ platform: string; handle: string }>(`select platform, handle from vt.social_competitors where tenant_id = $1 and platform = any($2) order by added_at`,
       [tenantId, c.provider === 'meta' ? ['instagram', 'facebook'] : ['youtube']]);
-    r = c.provider === 'meta' ? await meta.sync(deps.social!, f, tokens, since, { fresh, deadline, competitors }) : await youtube.sync(deps.social!, f, tokens, since, now, competitors);
+    r = c.provider === 'meta' ? await meta.sync(deps.social!, f, tokens, since, { fresh, deadline, competitors }) : await youtube.sync(deps.social!, f, tokens, since, now, competitors, deadline);
   } catch (e) {
     const expired = e instanceof PlatformError && e.expired;
     await deps.db.admin.query(`update vt.social_connections set status = $3, last_error = $4 where id = $1 and tenant_id = $2`, [connectionId, tenantId, expired ? 'expired' : 'error', (e as Error).message.slice(0, 500)]);
@@ -558,20 +559,32 @@ export async function syncTenant(deps: Deps, ctx: Ctx) {
   requireRole(ctx, ['marketing_head', 'data_steward', 'sales_ops'], 'Syncing social accounts');
   const conns = await deps.db.admin.query<{ id: string; provider: string }>(`select id, provider from vt.social_connections where tenant_id = $1 and provider <> 'sample'`, [ctx.tenantId]);
   if (!conns.length) throw new HttpError(409, 'No social accounts are connected yet.');
+  // each connection in parallel, so Instagram and Facebook, YouTube and competitors fit in one request
   const out: Record<string, unknown> = {};
-  for (const c of conns) {
+  await Promise.all(conns.map(async c => {
     try { out[c.provider] = await syncConnection(deps, ctx.tenantId, c.id); }
     catch (e) { out[c.provider] = { error: (e as Error).message }; }
-  }
+  }));
   return out;
 }
 
-/** Daily job: sync every connected account in every workspace. */
-export async function syncAll(deps: Deps) {
-  const conns = await deps.db.admin.query<{ id: string; tenant_id: string }>(`select id, tenant_id from vt.social_connections where provider <> 'sample' and status in ('active', 'error') order by last_sync_at nulls first limit 50`);
+/** Daily job: every connected account in every workspace, competitors included.
+ *  Each connection runs as its own request (its own time limit), started in parallel; without a base
+ *  URL to call back (tests, local), they run in this request instead. Accounts synced in the last
+ *  6 hours are skipped, so the job is cheap to call more than once. */
+export async function syncAll(deps: Deps, opts: { selfUrl?: string; internalKey?: string } = {}) {
+  const conns = await deps.db.admin.query<{ id: string; tenant_id: string }>(
+    `select id, tenant_id from vt.social_connections where provider <> 'sample' and status in ('active', 'error')
+       and (last_sync_at is null or last_sync_at < now() - interval '6 hours') order by last_sync_at nulls first limit 50`);
+  if (opts.selfUrl && opts.internalKey) {
+    const f = deps.fetch ?? fetch;
+    const results = await Promise.allSettled(conns.map(c => f(`${opts.selfUrl}/api/cron/social-sync?connection=${c.id}&tenant=${c.tenant_id}`, { method: 'POST', headers: { 'x-vt-internal': opts.internalKey! }, signal: AbortSignal.timeout(55_000) })
+      .then(r => { if (!r.ok) throw new Error(String(r.status)); })));
+    return { started: conns.length, ok: results.filter(r => r.status === 'fulfilled').length, failed: results.filter(r => r.status === 'rejected').length };
+  }
   let ok = 0, failed = 0;
-  for (const c of conns) { try { await syncConnection(deps, c.tenant_id, c.id); ok++; } catch { failed++; } }
-  return { ok, failed };
+  await Promise.all(conns.map(async c => { try { await syncConnection(deps, c.tenant_id, c.id); ok++; } catch { failed++; } }));
+  return { started: conns.length, ok, failed };
 }
 
 export async function disconnect(ctx: Ctx, connectionId: string) {

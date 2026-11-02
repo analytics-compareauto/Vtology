@@ -11,7 +11,7 @@ import { requestAction, decideAction } from './actions';
 import { signIn, refreshSession } from './auth';
 import { listWorkspaces, createWorkspace, switchSampleRole } from './workspaces';
 import { schemaReady } from './schema';
-import { startConnect, finishConnect, socialOverview, syncTenant, syncAll, disconnect, growthOverview, addCompetitor, removeCompetitor } from './social';
+import { startConnect, finishConnect, socialOverview, syncTenant, syncAll, syncConnection, disconnect, growthOverview, addCompetitor, removeCompetitor } from './social';
 import { ROLES, type RoleCode } from '@vtology/core';
 
 const MappingSchema = z.object({
@@ -51,8 +51,15 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
     const cb = top.match(/^GET social\/callback\/([a-z]+)$/);
     if (cb) return new Response(null, { status: 302, headers: { location: await finishConnect(deps, cb[1]!, url.searchParams) } });
     if (top === 'GET cron/social-sync' || top === 'POST cron/social-sync') {
-      if (!deps.cronSecret || req.headers.get('authorization') !== `Bearer ${deps.cronSecret}`) throw new HttpError(401, 'Not allowed.');
-      return json(200, await syncAll(deps));
+      // who may run it: Vercel's scheduler (with CRON_SECRET when set, else its own user agent), or
+      // this server calling itself for one connection (a key derived from the server's secret)
+      const internalKey = deps.secretKey ? await internalCronKey(deps.secretKey) : undefined;
+      const internal = !!internalKey && req.headers.get('x-vt-internal') === internalKey;
+      const fromScheduler = deps.cronSecret ? req.headers.get('authorization') === `Bearer ${deps.cronSecret}` : /vercel-cron/i.test(req.headers.get('user-agent') ?? '');
+      if (!internal && !fromScheduler) throw new HttpError(401, 'Not allowed.');
+      const one = url.searchParams.get('connection'), tenant = url.searchParams.get('tenant');
+      if (internal && one && tenant) return json(200, await syncConnection(deps, tenant, one));
+      return json(200, await syncAll(deps, { selfUrl: deps.social?.publicUrl, internalKey }));
     }
     const userId = await authenticate(req, deps);
     if (top === 'GET workspaces') return json(200, await listWorkspaces(deps, userId));
@@ -99,4 +106,10 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
     console.error(e);
     return json(500, { error: 'Something went wrong on our side. The error has been logged.' });
   }
+}
+
+/** A key only this server can derive, for calling itself from the daily job. */
+async function internalCronKey(secret: string): Promise<string> {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`vtology-cron:${secret}`));
+  return Buffer.from(d).toString('hex');
 }
