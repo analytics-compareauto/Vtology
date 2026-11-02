@@ -17,6 +17,12 @@ export interface Deps {
   supabaseKey?: string;
   /** Local demo mode only (no Supabase): secret for self-issued tokens. */
   localSecret?: string;
+  /** Encrypts stored platform access keys and signs connection requests (VTOLOGY_SECRET_KEY). */
+  secretKey?: string;
+  /** Social platform apps (Meta, Google) and the public address the platforms send people back to. */
+  social?: import('./social').SocialConfig;
+  /** Shared secret for the daily scheduled job (Vercel sends it as a Bearer token). */
+  cronSecret?: string;
   fetch?: typeof fetch;
   now?: () => Date;
 }

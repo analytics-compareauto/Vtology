@@ -28,7 +28,7 @@ describe('migrations', () => {
     const { db, pg } = await createPgliteDb({ migrate: false });
     for (const m of MIGRATIONS.slice(0, 4)) await (pg as { exec: (s: string) => Promise<unknown> }).exec(m.sql);
     const r = await ensureSchema(db);
-    expect(r.applied).toEqual(['20261031000005_workspaces']);
+    expect(r.applied).toEqual(['20261031000005_workspaces', '20261102000006_social']);
     const cols = await db.admin.query<{ column_name: string }>(`select column_name from information_schema.columns where table_schema = 'vt' and table_name = 'tenants'`);
     expect(cols.map(c => c.column_name)).toContain('is_demo');
   });

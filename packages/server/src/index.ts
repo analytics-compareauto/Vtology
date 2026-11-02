@@ -9,3 +9,5 @@ export { ensureSchema, schemaReady } from './schema';
 export { signIn, refreshSession, type Session, type AuthConfig } from './auth';
 export { listWorkspaces, createWorkspace, switchSampleRole } from './workspaces';
 export { generateDemo, loadDemo } from './demo';
+export { startConnect, finishConnect, socialOverview, syncConnection, syncAll, type SocialConfig } from './social';
+export { encrypt, decrypt } from './secrets';

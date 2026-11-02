@@ -9,20 +9,23 @@ import { Findings } from './views/Findings';
 import { Partners } from './views/Partners';
 import { Approvals } from './views/Approvals';
 import { DataView } from './views/DataView';
+import { Social } from './views/Social';
 import { ActionDialog, type ActionDraft } from './ActionDialog';
 
 export interface WorkspaceData { me: Me; journeys: Journey[]; partners: PartnerScore[]; findings: Finding[]; actions: ActionRun[] }
-type Tab = 'overview' | 'journeys' | 'findings' | 'partners' | 'approvals' | 'data';
+type Tab = 'overview' | 'journeys' | 'findings' | 'partners' | 'social' | 'approvals' | 'data';
 const TABS: { id: Tab; label: string }[] = [
   { id: 'overview', label: 'Overview' }, { id: 'journeys', label: 'Journeys' }, { id: 'findings', label: 'Findings' },
-  { id: 'partners', label: 'Partners' }, { id: 'approvals', label: 'Approvals' }, { id: 'data', label: 'Data' },
+  { id: 'partners', label: 'Partners' }, { id: 'social', label: 'Social' }, { id: 'approvals', label: 'Approvals' }, { id: 'data', label: 'Data' },
 ];
 
 export function Dashboard({ workspaceId, email, onSwitch, onSignOut }: { workspaceId: string; email: string | null; onSwitch: (id: string | null) => void; onSignOut: () => void }) {
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>('overview');
+  const [tab, setTab] = useState<Tab>(() => {
+    try { return new URLSearchParams(window.location.search).get('tab') === 'social' ? 'social' : 'overview'; } catch { return 'overview'; }
+  });
   const [draft, setDraft] = useState<ActionDraft | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
@@ -43,7 +46,16 @@ export function Dashboard({ workspaceId, email, onSwitch, onSignOut }: { workspa
   }, [T, onSwitch]);
 
   useEffect(() => { load(); api<{ workspaces: Workspace[] }>('GET', '/workspaces').then(r => setWorkspaces(r.workspaces)).catch(() => undefined); }, [load]);
-  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 4000); return () => clearTimeout(t); }, [toast]);
+  // coming back from Meta or Google after connecting an account
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const st = q.get('social');
+    if (!st) return;
+    const name = q.get('provider') === 'youtube' ? 'YouTube' : 'Instagram and Facebook';
+    setToast(st === 'connected' ? `${name} connected: ${q.get('accounts') ?? 0} accounts, ${q.get('posts') ?? 0} posts synced.` : `${name} was not connected. ${q.get('message') ?? ''}`);
+    window.history.replaceState(null, '', window.location.pathname);
+  }, []);
+  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 6000); return () => clearTimeout(t); }, [toast]);
 
   const pending = useMemo(() => data?.actions.filter(a => a.status === 'awaiting_approval' && canDecide(a.type_code as ActionCode, data.me.role)).length ?? 0, [data]);
 
@@ -101,6 +113,7 @@ export function Dashboard({ workspaceId, email, onSwitch, onSignOut }: { workspa
         {tab === 'journeys' && <Journeys data={data} act={act} />}
         {tab === 'findings' && <Findings data={data} act={act} />}
         {tab === 'partners' && <Partners data={data} act={act} />}
+        {tab === 'social' && (['partner_user', 'relationship_manager'].includes(me.role) ? <div className="empty">Social insights are not part of your role’s view.</div> : <Social data={data} workspaceId={workspaceId} notify={setToast} />)}
         {tab === 'approvals' && <Approvals data={data} workspaceId={workspaceId} reload={load} notify={setToast} />}
         {tab === 'data' && <DataView data={data} workspaceId={workspaceId} reload={load} notify={setToast} />}
       </main>

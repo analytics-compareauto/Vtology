@@ -11,6 +11,7 @@ import { requestAction, decideAction } from './actions';
 import { signIn, refreshSession } from './auth';
 import { listWorkspaces, createWorkspace, switchSampleRole } from './workspaces';
 import { schemaReady } from './schema';
+import { startConnect, finishConnect, socialOverview, syncTenant, syncAll, disconnect } from './social';
 import { ROLES, type RoleCode } from '@vtology/core';
 
 const MappingSchema = z.object({
@@ -46,6 +47,13 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
     if (top === 'POST auth/refresh') return json(200, await refreshSession(deps, (await body(req, RefreshSchema)).refreshToken));
 
     await schemaReady(deps.db);
+    // the platform sends the browser back here after the brand approves access; verified by the signed state
+    const cb = top.match(/^GET social\/callback\/([a-z]+)$/);
+    if (cb) return new Response(null, { status: 302, headers: { location: await finishConnect(deps, cb[1]!, url.searchParams) } });
+    if (top === 'GET cron/social-sync' || top === 'POST cron/social-sync') {
+      if (!deps.cronSecret || req.headers.get('authorization') !== `Bearer ${deps.cronSecret}`) throw new HttpError(401, 'Not allowed.');
+      return json(200, await syncAll(deps));
+    }
     const userId = await authenticate(req, deps);
     if (top === 'GET workspaces') return json(200, await listWorkspaces(deps, userId));
     if (top === 'POST workspaces') return json(201, await createWorkspace(deps, userId, await body(req, WorkspaceSchema)));
@@ -55,6 +63,12 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
     const route = `${req.method} ${parts.slice(2).join('/')}`;
 
     if (route === 'GET me') return json(200, await me(ctx));
+    if (route === 'GET social') return json(200, await socialOverview(deps, ctx));
+    if (route === 'POST social/sync') return json(200, await syncTenant(deps, ctx));
+    const sc = route.match(/^POST social\/connect\/([a-z]+)$/);
+    if (sc) return json(200, await startConnect(deps, ctx, sc[1]!));
+    const sd = route.match(/^DELETE social\/([0-9a-f-]{36})$/);
+    if (sd) return json(200, await disconnect(ctx, sd[1]!));
     if (route === 'POST sample/role') return json(200, await switchSampleRole(ctx, (await body(req, RoleSchema)).role));
     if (route === 'POST imports') return json(201, await importCsv(ctx, await body(req, ImportSchema)));
     if (route === 'POST pipeline/run') return json(200, await runPipeline(ctx));

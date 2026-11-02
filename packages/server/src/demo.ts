@@ -231,5 +231,117 @@ export async function loadDemo(ctx: Ctx): Promise<DemoLoadResult> {
     imports.push({ entity, imported: res.imported, warnings: res.errors.length });
   }
   const { stats } = await runPipeline(ctx);
+  await loadSampleSocial(ctx);
   return { imports, pipeline: stats };
+}
+
+// ===================================================================== sample social footprint
+type Tpl = [theme: string, weight: number, lift: number, captions: string[]];
+const SOCIAL_TPL: Record<Industry, { brand: string; handle: string; tpl: Tpl[]; hindi: string[] }> = {
+  Automotive: {
+    brand: 'Vegaa Motors', handle: 'vegaamotors',
+    tpl: [
+      ['comparison', 12, 1.9, ['Strada vs Terra: which one fits your family?', 'Terra vs the segment leader: a fair comparison', 'Petrol vs CNG Strada: which is better for city driving?']],
+      ['price', 30, 0.6, ['Festive offer: Strada from ₹6.99 lakh on-road. Book now!', 'EMI starting ₹9,999. Limited period deal on Terra', 'Exchange bonus up to ₹50,000 this month']],
+      ['launch', 10, 1.3, ['First look: the new Terra facelift', 'Coming soon. Something big is on its way', 'Launched: Metro, the compact for every lane']],
+      ['review', 12, 1.4, ['Owner review: 30,000 km with the Strada', 'Road test: Terra on the Mumbai-Pune expressway', 'Test drive impressions from Pune']],
+      ['ev', 6, 1.7, ['Volt EV: real-world range on a Bengaluru commute', 'Charging at home explained in 60 seconds', 'Is an electric car right for you?']],
+      ['safety', 8, 1.0, ['5-star safety: what the NCAP rating means for you', 'Six airbags, standard across the range']],
+      ['tips', 10, 1.2, ['5 monsoon driving tips', 'How to read your service schedule', 'Things to know before your first highway trip']],
+      ['festive', 12, 1.05, ['Happy Diwali from all of us at Vegaa', 'Navratri special: drive home happiness']],
+    ],
+    hindi: ['Strada vs Terra: आपके परिवार के लिए कौन सी कार सही है?', 'Volt EV: एक बार चार्ज, पूरा हफ्ता शहर में', 'मानसून में गाड़ी चलाने के 5 tips', 'नई Terra की पहली झलक'],
+  },
+  BFSI: {
+    brand: 'Northstar Finance', handle: 'northstarfinance',
+    tpl: [
+      ['tips', 14, 1.6, ['5 mistakes to avoid before taking a home loan', 'How to read your loan statement, explained', 'Things to know about prepaying your loan']],
+      ['rates', 28, 0.6, ['Home loan interest rate now from 8.35% p.a.', 'Lifetime free credit card. Apply today', 'Pre-approved personal loan offer inside the app']],
+      ['fraud', 10, 1.5, ['Never share your OTP. Stay safe from fraud', 'Spot a phishing SMS in 3 seconds', 'Scam alert: fake loan apps to watch for']],
+      ['credit', 10, 1.4, ['What is a good credit score? CIBIL explained', 'How to improve your credit score in 6 months']],
+      ['tax', 10, 1.2, ['Save tax under 80C: a simple checklist', 'ITR filing deadline approaching']],
+      ['stories', 8, 1.3, ['Meet Priya: her dream home story', 'From first salary to first home: a customer journey']],
+      ['product', 12, 0.85, ['Introducing instant FD in our app', 'Credit card features you might be missing']],
+      ['festive', 8, 1.0, ['Happy Dhanteras. Start a SIP today', 'Wishing you a prosperous Diwali']],
+    ],
+    hindi: ['होम लोन लेने से पहले ये 5 गलतियाँ न करें', 'OTP किसी के साथ share न करें, fraud से बचें', 'अच्छा credit score क्या होता है?', 'टैक्स बचाने के आसान तरीके'],
+  },
+  FMCG: {
+    brand: 'Gharelu Foods', handle: 'gharelufoods',
+    tpl: [
+      ['recipe', 16, 1.7, ['3-minute breakfast recipe with Gharelu poha mix', 'Try this monsoon snack hack', 'Make this tiffin favourite in 10 minutes']],
+      ['offer', 26, 0.6, ['Flat 20% off on Blinkit this weekend', 'Buy now on Zepto: combo offer', 'Instamart deal: 2 for 1']],
+      ['creator', 10, 1.5, ['Collab with @chefmeera: our masala chai cookies', 'Featuring @fitwithrohan: high-protein snack ideas']],
+      ['launch', 10, 1.2, ['Introducing our new millet crunch flavour', 'New: no added sugar range now available']],
+      ['health', 10, 1.3, ['What is in your snack? Our ingredients, explained', 'Protein-packed and natural: the new range']],
+      ['giveaway', 10, 1.1, ['Giveaway! Comment your favourite recipe to win a hamper', 'Contest: share your tiffin photo and win']],
+      ['festive', 18, 0.95, ['Happy Diwali! Sweets made at home', 'Festive gift packs are here']],
+    ],
+    hindi: ['सिर्फ 3 मिनट में बनाएं पोहा, आसान recipe', 'नया millet crunch, बिना चीनी के', 'घर की बनी मिठाई, Diwali special recipe'],
+  },
+};
+
+export function generateSocial(industry: Industry, now: Date) {
+  const cfg = SOCIAL_TPL[industry];
+  const r = rng({ Automotive: 101, BFSI: 202, FMCG: 303 }[industry]);
+  const accounts = [
+    { platform: 'instagram' as const, externalId: `ig-${cfg.handle}`, handle: cfg.handle, name: cfg.brand, followers: r.int(180000, 420000), posts: 72 },
+    { platform: 'facebook' as const, externalId: `fb-${cfg.handle}`, handle: cfg.handle, name: cfg.brand, followers: r.int(300000, 900000), posts: 40 },
+    { platform: 'youtube' as const, externalId: `yt-${cfg.handle}`, handle: `@${cfg.handle}`, name: cfg.brand, followers: r.int(60000, 250000), posts: 28 },
+  ];
+  const formats: Record<string, [string, number, number][]> = {
+    instagram: [['reel', 45, 1.6], ['carousel', 20, 1.1], ['image', 35, 0.65]],
+    facebook: [['video', 30, 1.15], ['image', 45, 0.85], ['link', 15, 0.6], ['text', 10, 0.5]],
+    youtube: [['video', 55, 1.0], ['short', 45, 1.35]],
+  };
+  const timeLift: [number, number][] = [[8, 0.8], [10, 0.85], [13, 0.95], [15, 0.9], [18, 1.3], [20, 1.35], [22, 1.0]];
+  const posts: { accountExternalId: string; platform: 'instagram' | 'facebook' | 'youtube'; externalId: string; postedAt: Date; format: string; caption: string; views: number | null; reach: number | null; likes: number; comments: number; shares: number | null; saves: number | null; watchMinutes: number | null; avgViewPct: number | null }[] = [];
+  for (const a of accounts) {
+    for (let i = 0; i < a.posts; i++) {
+      const [, , themeLift, caps] = r.weighted(cfg.tpl.map(t => [t, t[1]] as const));
+      const hindi = r.chance(0.14);
+      const caption = hindi ? r.pick(cfg.hindi) : r.pick(caps);
+      const [format, , fLift] = r.weighted(formats[a.platform]!.map(f => [f, f[1]] as const));
+      const [hour, tLift] = r.pick(timeLift);
+      const day = r.int(1, 170);
+      const postedAt = new Date(now.getTime() - day * 86_400_000);
+      postedAt.setUTCHours(hour, 0, 0, 0);
+      postedAt.setTime(postedAt.getTime() - 330 * 60_000); // that hour in IST
+      const noise = Math.exp((r.next() - 0.5) * 0.7);
+      const lift = themeLift * fLift * tLift * (hindi ? 1.45 : 1) * noise;
+      const reachBase = a.followers * (a.platform === 'youtube' ? 0.35 : a.platform === 'instagram' ? 0.22 : 0.06);
+      const reach = Math.round(reachBase * Math.min(lift, 3) * (0.8 + r.next() * 0.4));
+      const er = 0.032 * lift;
+      const inter = Math.round(reach * er);
+      const yt = a.platform === 'youtube';
+      posts.push({
+        accountExternalId: a.externalId, platform: a.platform, externalId: `${a.externalId}-p${i}`, postedAt, format, caption,
+        views: yt || format === 'reel' || format === 'video' ? Math.round(reach * (yt ? 1 : 1.3)) : null,
+        reach: yt ? null : reach, likes: Math.round(inter * 0.72), comments: Math.round(inter * 0.07),
+        shares: Math.round(inter * 0.09), saves: a.platform === 'instagram' ? Math.round(inter * 0.12) : null,
+        watchMinutes: yt ? Math.round(reach * (format === 'short' ? 0.4 : 3.2) * Math.min(lift, 2)) : null,
+        avgViewPct: yt ? Math.min(95, Math.round((format === 'short' ? 62 : 38) * Math.min(lift, 1.6))) : null,
+      });
+    }
+  }
+  return { accounts, posts };
+}
+
+/** Put the sample social footprint into a workspace (sample workspaces only). */
+export async function loadSampleSocial(ctx: Ctx) {
+  const { accounts, posts } = generateSocial(ctx.industry, ctx.now);
+  await ctx.db.transaction(async sql => {
+    const [conn] = await sql.query<{ id: string }>(`insert into vt.social_connections (tenant_id, provider, label, connected_by, last_sync_at) values ($1, 'sample', 'Sample accounts (fictional)', $2, now()) returning id`, [ctx.tenantId, ctx.userId]);
+    const ids = new Map<string, string>();
+    for (const a of accounts) {
+      const [row] = await sql.query<{ id: string }>(`insert into vt.social_accounts (tenant_id, connection_id, platform, external_id, handle, name, followers, posts_count) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
+        [ctx.tenantId, conn!.id, a.platform, a.externalId, a.handle, a.name, a.followers, a.posts]);
+      ids.set(a.externalId, row!.id);
+    }
+    for (const p of posts) await sql.query(
+      `insert into vt.social_posts (tenant_id, account_id, external_id, posted_at, format, caption, views, reach, likes, comments, shares, saves, watch_minutes, avg_view_pct, metrics_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now())`,
+      [ctx.tenantId, ids.get(p.accountExternalId), p.externalId, p.postedAt.toISOString(), p.format, p.caption, p.views, p.reach, p.likes, p.comments, p.shares, p.saves, p.watchMinutes, p.avgViewPct]);
+  });
+  return { accounts: accounts.length, posts: posts.length };
 }

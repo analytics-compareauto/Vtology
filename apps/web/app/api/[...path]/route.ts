@@ -84,9 +84,16 @@ async function route(req: Request): Promise<Response> {
   const jwtSecret = process.env.SUPABASE_JWT_SECRET;
   const supabaseKey = process.env.SUPABASE_PUBLISHABLE_KEY?.trim() || process.env.SUPABASE_ANON_KEY?.trim();
   if (new URL(req.url).pathname === '/api/health') return health(LOCAL || !!(supabaseUrl || jwtSecret), !!supabaseKey);
-  if (LOCAL) return handle(req, { db: await db(), localSecret: LOCAL_SECRET });
+  const env = (k: string) => process.env[k]?.trim() || undefined;
+  const social = {
+    publicUrl: env('VTOLOGY_PUBLIC_URL') ?? (LOCAL ? new URL(req.url).origin : 'https://vtology.vercel.app'),
+    meta: env('META_APP_ID') && env('META_APP_SECRET') ? { appId: env('META_APP_ID')!, appSecret: env('META_APP_SECRET')!, version: env('META_GRAPH_VERSION'), configId: env('META_CONFIG_ID') } : undefined,
+    google: env('GOOGLE_CLIENT_ID') && env('GOOGLE_CLIENT_SECRET') ? { clientId: env('GOOGLE_CLIENT_ID')!, clientSecret: env('GOOGLE_CLIENT_SECRET')! } : undefined,
+  };
+  const common = { secretKey: env('VTOLOGY_SECRET_KEY') ?? (LOCAL ? `${LOCAL_SECRET}-tokens` : undefined), social, cronSecret: env('CRON_SECRET') };
+  if (LOCAL) return handle(req, { db: await db(), localSecret: LOCAL_SECRET, ...common });
   if (!supabaseUrl && !jwtSecret) return Response.json({ error: 'Set SUPABASE_URL (and optionally SUPABASE_JWT_SECRET) on the server.' }, { status: 500 });
-  return handle(req, { db: await db(), supabaseUrl, supabaseKey, jwtSecret });
+  return handle(req, { db: await db(), supabaseUrl, supabaseKey, jwtSecret, ...common });
 }
 
 /** Health check that really talks to the database, so a wrong password or setup shows up here. */
@@ -115,8 +122,10 @@ async function health(auth: boolean, signIn: boolean): Promise<Response> {
   const ok = database === 'connected' && auth;
   const url = LOCAL ? undefined : databaseUrl();
   const databaseUrlCheck = url && !ok ? describeDatabaseUrl(url) : undefined;
-  return Response.json({ ok, service: 'vtology', version: '0.2.0', database, schema, databaseUrl: databaseUrlCheck, stages, auth: auth ? 'configured' : 'SUPABASE_URL missing', signIn: LOCAL ? 'local demo mode' : signIn ? 'configured' : 'add SUPABASE_PUBLISHABLE_KEY' }, { status: ok ? 200 : 503 });
+  return Response.json({ ok, service: 'vtology', version: '0.2.0', database, schema, databaseUrl: databaseUrlCheck, stages, auth: auth ? 'configured' : 'SUPABASE_URL missing', signIn: LOCAL ? 'local demo mode' : signIn ? 'configured' : 'add SUPABASE_PUBLISHABLE_KEY',
+    social: { meta: !!(process.env.META_APP_ID && process.env.META_APP_SECRET), youtube: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET), secretKey: (process.env.VTOLOGY_SECRET_KEY ?? '').trim().length >= 32 } }, { status: ok ? 200 : 503 });
 }
 
 export const GET = route;
 export const POST = route;
+export const DELETE = route;
