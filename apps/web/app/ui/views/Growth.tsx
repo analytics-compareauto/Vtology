@@ -141,7 +141,7 @@ export function Growth({ data, workspaceId, notify, range, onRange }: { data: Wo
 }
 
 function Delta({ label, now, before, note, hours }: { label: string; now: number | null; before: number | null; note?: string; hours?: boolean }) {
-  const fmt = (x: number) => (hours ? (x >= 10 ? `${Math.round(x)} h` : `${x.toFixed(1)} h`) : compact(x));
+  const fmt = (x: number) => (hours ? (x >= 1000 ? `${compact(x)} h` : x >= 10 ? `${Math.round(x)} h` : `${x.toFixed(1)} h`) : compact(x));
   const up = now !== null && before !== null && now >= before;
   return (
     <div className="kpi" style={{ padding: '14px 16px' }}>

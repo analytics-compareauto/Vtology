@@ -365,7 +365,7 @@ export function generateSocial(industry: Industry, now: Date) {
     for (let d = 120; d >= 0; d--) {
       const gain = Math.max(0, Math.round(f * monthly / 30 * (0.5 + r.next())));
       f = d === 0 ? a.followers : Math.min(a.followers, f + gain);
-      daily.push({ externalId: a.externalId, day: new Date(now.getTime() - d * 86_400_000).toISOString().slice(0, 10), followers: f, newFollowers: own && a.platform !== 'youtube' && d <= 30 ? gain : null });
+      daily.push({ externalId: a.externalId, day: new Date(now.getTime() - d * 86_400_000).toISOString().slice(0, 10), followers: f, newFollowers: own && a.platform !== 'youtube' ? gain : null });
     }
   }
   return { accounts, posts, competitors, daily };
