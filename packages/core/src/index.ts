@@ -6,3 +6,4 @@ export * from './rules';
 export * from './actions';
 export * from './social';
 export * from './growth';
+export * from './feed';

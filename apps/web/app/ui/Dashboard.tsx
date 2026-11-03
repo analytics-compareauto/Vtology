@@ -58,6 +58,10 @@ export function Dashboard({ workspaceId, email, onSwitch, onSignOut }: { workspa
   }, [T, onSwitch]);
 
   useEffect(() => { load(); api<{ workspaces: Workspace[] }>('GET', '/workspaces').then(r => setWorkspaces(r.workspaces)).catch(() => undefined); }, [load]);
+  // connected sources not pulled in the last hour: pull them quietly, then refresh what's on screen
+  useEffect(() => {
+    api<{ pulled: number }>('POST', `${T}/sources/sync-due`).then(r => { if (r.pulled) load(); }).catch(() => undefined);
+  }, [T, load]);
   // coming back from Meta or Google after connecting an account
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);

@@ -13,6 +13,7 @@ import { listWorkspaces, createWorkspace, switchSampleRole } from './workspaces'
 import { schemaReady } from './schema';
 import { startConnect, finishConnect, socialOverview, syncTenant, syncAll, syncConnection, disconnect, growthOverview, addCompetitor, removeCompetitor } from './social';
 import { ROLES, type RoleCode } from '@vtology/core';
+import { listSources, createSource, updateSource, deleteSource, syncSource, syncTenantSources, dueSources } from './sources';
 
 const MappingSchema = z.object({
   entity: z.enum(['lead', 'journey_event', 'transaction', 'campaign', 'partner', 'consent']),
@@ -58,14 +59,20 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
       const fromScheduler = deps.cronSecret ? req.headers.get('authorization') === `Bearer ${deps.cronSecret}` : /vercel-cron/i.test(req.headers.get('user-agent') ?? '');
       if (!internal && !fromScheduler) throw new HttpError(401, 'Not allowed.');
       const one = url.searchParams.get('connection'), tenant = url.searchParams.get('tenant');
+      const src = url.searchParams.get('source');
+      if (internal && src && tenant) {
+        const r = await syncSource(deps, tenant, src);
+        console.log(`[vtology] daily sync, source ${src}: ${r.leads} leads (${r.newLeads} new, ${r.moved} moved on)${r.more ? ', more next run' : ''}`);
+        return json(200, r);
+      }
       if (internal && one && tenant) {
         const r = await syncConnection(deps, tenant, one);
         console.log(`[vtology] daily sync, connection ${one}: ${r.accounts} accounts, ${r.posts} posts${r.warnings.length ? `; ${r.warnings.length} warnings` : ''}`);
         return json(200, r);
       }
-      const r = await syncAll(deps, { selfUrl: deps.social?.publicUrl, internalKey });
-      console.log(`[vtology] daily sync: ${r.started} connections due, ${r.ok} synced, ${r.failed} failed`);
-      return json(200, r);
+      const [r, s] = await Promise.all([syncAll(deps, { selfUrl: deps.social?.publicUrl, internalKey }), syncAllSources(deps, { selfUrl: deps.social?.publicUrl, internalKey })]);
+      console.log(`[vtology] daily sync: ${r.started} connections due, ${r.ok} synced, ${r.failed} failed; ${s.started} data sources due, ${s.ok} pulled, ${s.failed} failed`);
+      return json(200, { ...r, sources: s });
     }
     const userId = await authenticate(req, deps);
     if (top === 'GET workspaces') return json(200, await listWorkspaces(deps, userId));
@@ -83,6 +90,27 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
       const pl = url.searchParams.get('platform');
       const range = url.searchParams.get('from') ? rangeParam(url, ctx.now, 30) : (per === 'week' || per === 'quarter' ? per : 'month');
       return json(200, await growthOverview(deps, ctx, range, pl && ['instagram', 'facebook', 'youtube'].includes(pl) ? pl : null));
+    }
+    // ---- connected data sources (dealer dashboards, DMS, CRM feeds)
+    if (route === 'GET sources') return json(200, await listSources(ctx));
+    if (route === 'POST sources') return json(201, await createSource(deps, ctx, await req.json().catch(() => ({}))));
+    if (route === 'POST sources/sync') return json(200, await syncTenantSources(deps, ctx));
+    if (route === 'POST sources/sync-due') {
+      // opening the app pulls any source not pulled in the last hour (the scheduler only runs daily)
+      if (!['marketing_head', 'data_steward', 'sales_ops'].includes(ctx.role)) return json(200, { pulled: 0, results: {} });
+      const due = await dueSources(deps, ctx.tenantId);
+      const out: Record<string, unknown> = {};
+      for (const d of due) { try { out[d.id] = await syncSource(deps, ctx.tenantId, d.id, 25_000); } catch (e) { out[d.id] = { error: (e as Error).message }; } }
+      return json(200, { pulled: due.length, results: out });
+    }
+    const ss = route.match(/^(PATCH|DELETE|POST) sources\/([0-9a-f-]{36})(\/sync)?$/);
+    if (ss) {
+      if (ss[1] === 'PATCH' && !ss[3]) return json(200, await updateSource(deps, ctx, ss[2]!, await req.json().catch(() => ({}))));
+      if (ss[1] === 'DELETE' && !ss[3]) return json(200, await deleteSource(ctx, ss[2]!));
+      if (ss[1] === 'POST' && ss[3]) {
+        if (!['marketing_head', 'data_steward', 'sales_ops'].includes(ctx.role)) throw new HttpError(403, 'Your role cannot sync data sources.');
+        return json(200, await syncSource(deps, ctx.tenantId, ss[2]!));
+      }
     }
     if (route === 'POST social/competitors') {
       const b = await req.json().catch(() => ({})) as { platform?: unknown; handle?: unknown };
@@ -132,4 +160,18 @@ function rangeParam(url: URL, now: Date, days: number): { from: string; to: stri
   if (from! < earliest) from = earliest;
   if (Date.parse(to!) - Date.parse(from!) > 400 * 86_400_000) from = new Date(Date.parse(to!) - 400 * 86_400_000).toISOString().slice(0, 10);
   return { from: from!, to: to! };
+}
+
+/** Daily: every data source due for a pull, each in its own request (own time limit), in parallel. */
+async function syncAllSources(deps: Deps, opts: { selfUrl?: string; internalKey?: string }) {
+  const due = await dueSources(deps);
+  if (opts.selfUrl && opts.internalKey) {
+    const f = deps.fetch ?? fetch;
+    const results = await Promise.allSettled(due.map(d => f(`${opts.selfUrl}/api/cron/social-sync?source=${d.id}&tenant=${d.tenant_id}`, { method: 'POST', headers: { 'x-vt-internal': opts.internalKey! }, signal: AbortSignal.timeout(55_000) })
+      .then(r => { if (!r.ok) throw new Error(String(r.status)); })));
+    return { started: due.length, ok: results.filter(r => r.status === 'fulfilled').length, failed: results.filter(r => r.status === 'rejected').length };
+  }
+  let ok = 0, failed = 0;
+  await Promise.all(due.map(async d => { try { await syncSource(deps, d.tenant_id, d.id); ok++; } catch { failed++; } }));
+  return { started: due.length, ok, failed };
 }

@@ -4,6 +4,7 @@ import { CANONICAL, parseCsv, type Entity } from '@vtology/core';
 import type { WorkspaceData } from '../Dashboard';
 import { api, ApiError, type ImportResult, type PipelineStats } from '../api';
 import { ago, num } from '../format';
+import { Sources } from './Sources';
 
 const ENTITIES: { id: Entity; label: string; hint: string }[] = [
   { id: 'partner', label: 'Partners', hint: 'Dealers, branches, DSAs or distributors. Import these first.' },
@@ -114,6 +115,7 @@ export function DataView({ data, workspaceId, reload, notify }: { data: Workspac
 
   return (
     <>
+      {['data_steward', 'marketing_head', 'sales_ops'].includes(me.role) && <Sources workspaceId={workspaceId} notify={notify} reload={reload} />}
       <section style={{ display: 'grid', gap: 12 }}>
         <div className="section-title"><h2>Matching</h2>{canRun && <button className="btn primary" onClick={run} disabled={running}>{running ? 'Matching…' : 'Run matching again'}</button>}</div>
         {running && <div className="progress" />}
