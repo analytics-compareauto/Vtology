@@ -372,10 +372,29 @@ export function generateSocial(industry: Industry, now: Date) {
 }
 
 /** Put the sample social footprint into a workspace (sample workspaces only). */
-export async function loadSampleSocial(ctx: Ctx) {
+/** Sample workspaces keep a current sample footprint: created before social existed, or last
+ *  generated more than a day ago, it is rebuilt around today. Returns true when it rebuilt. */
+export async function refreshSampleSocial(ctx: Ctx): Promise<boolean> {
+  if (!ctx.isDemo) return false;
+  return loadSampleSocial(ctx, { onlyIfStale: true });
+}
+
+export async function loadSampleSocial(ctx: Ctx, opts: { onlyIfStale?: boolean } = {}): Promise<boolean> {
   const { accounts, posts, competitors, daily } = generateSocial(ctx.industry, ctx.now);
-  await ctx.db.transaction(async sql => {
-    const [conn] = await sql.query<{ id: string }>(`insert into vt.social_connections (tenant_id, provider, label, connected_by, last_sync_at) values ($1, 'sample', 'Sample accounts (fictional)', $2, now()) returning id`, [ctx.tenantId, ctx.userId]);
+  return ctx.db.transaction(async sql => {
+    if (opts.onlyIfStale) {
+      // one rebuild at a time per workspace; a second request waits, then finds it fresh
+      await sql.query(`select pg_advisory_xact_lock(hashtext('vt-sample-social:' || $1))`, [ctx.tenantId]);
+      const [c] = await sql.query<{ fresh: boolean; competitors: number }>(
+        `select coalesce(bool_or(c.last_sync_at > $2::timestamptz - interval '1 day'), false) as fresh,
+                (select count(*)::int from vt.social_competitors where tenant_id = $1) as competitors
+           from vt.social_connections c where c.tenant_id = $1 and c.provider = 'sample'`, [ctx.tenantId, ctx.now.toISOString()]);
+      if (c?.fresh && c.competitors > 0) return false;
+      if ((await sql.query(`select 1 from vt.social_connections where tenant_id = $1 and provider <> 'sample' limit 1`, [ctx.tenantId])).length) return false; // real accounts: never touch
+      await sql.query(`delete from vt.social_competitors where tenant_id = $1`, [ctx.tenantId]);
+      await sql.query(`delete from vt.social_connections where tenant_id = $1 and provider = 'sample'`, [ctx.tenantId]); // accounts, posts and history go with it
+    }
+    const [conn] = await sql.query<{ id: string }>(`insert into vt.social_connections (tenant_id, provider, label, connected_by, last_sync_at) values ($1, 'sample', 'Sample accounts (fictional)', $2, $3) returning id`, [ctx.tenantId, ctx.userId, ctx.now.toISOString()]);
     const ids = new Map<string, string>();
     for (const a of accounts) {
       const [row] = await sql.query<{ id: string }>(`insert into vt.social_accounts (tenant_id, connection_id, platform, external_id, handle, name, followers, posts_count) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
@@ -392,10 +411,15 @@ export async function loadSampleSocial(ctx: Ctx) {
     await sql.query(`insert into vt.social_account_daily (account_id, tenant_id, day, followers, new_followers)
        select a, $1, d::date, f, nf from unnest($2::uuid[], $3::text[], $4::int[], $5::int[]) as t(a, d, f, nf)`,
       [ctx.tenantId, daily.map(d => ids.get(d.externalId)), daily.map(d => d.day), daily.map(d => d.followers), daily.map(d => d.newFollowers)]);
-    for (const p of posts) await sql.query(
+    // every post in one statement
+    const col = <T,>(f: (p: typeof posts[number]) => T) => posts.map(f);
+    await sql.query(
       `insert into vt.social_posts (tenant_id, account_id, external_id, posted_at, format, caption, views, reach, likes, comments, shares, saves, watch_minutes, avg_view_pct, metrics_at)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now())`,
-      [ctx.tenantId, ids.get(p.accountExternalId), p.externalId, p.postedAt.toISOString(), p.format, p.caption, p.views, p.reach, p.likes, p.comments, p.shares, p.saves, p.watchMinutes, p.avgViewPct]);
+       select $1, a, e, t::timestamptz, f, c, v, r, l, cm, sh, sv, w, ap, now()
+         from unnest($2::uuid[], $3::text[], $4::text[], $5::text[], $6::text[], $7::bigint[], $8::bigint[], $9::bigint[], $10::bigint[], $11::bigint[], $12::bigint[], $13::numeric[], $14::numeric[])
+           as x(a, e, t, f, c, v, r, l, cm, sh, sv, w, ap)`,
+      [ctx.tenantId, col(p => ids.get(p.accountExternalId)), col(p => p.externalId), col(p => p.postedAt.toISOString()), col(p => p.format), col(p => p.caption),
+       col(p => p.views), col(p => p.reach), col(p => p.likes), col(p => p.comments), col(p => p.shares), col(p => p.saves), col(p => p.watchMinutes), col(p => p.avgViewPct)]);
+    return true;
   });
-  return { accounts: accounts.length, posts: posts.length };
 }

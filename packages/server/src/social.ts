@@ -10,6 +10,7 @@
  * Only brand-level data is stored: the brand's own accounts, posts and aggregate metrics. Comments
  * are counted, never stored, and nothing about individual followers is collected.
  */
+import { refreshSampleSocial } from './demo';
 import { analyzeSocial, growthReport, rangeOf, type DateRange, hashValue, normalizeEmail, normalizePhone, type GAccount, type GDaily, type GPost, type Industry, type Period, type SocialAccount, type SocialPost } from '@vtology/core';
 import { loadContext } from './context';
 import { runPipeline } from './pipeline';
@@ -597,6 +598,7 @@ export async function disconnect(ctx: Ctx, connectionId: string) {
 // ===================================================================== reading
 export async function socialOverview(deps: Deps, ctx: Ctx, range?: DateRange) {
   if (['partner_user', 'relationship_manager'].includes(ctx.role)) throw new HttpError(403, 'Social insights are not part of your role’s view.');
+  await refreshSampleSocial(ctx);
   // paid campaigns against the pipeline they produced (spend only for roles that see money)
     const seesMoney = ['marketing_head', 'finance'].includes(ctx.role);
     const campaigns = await deps.db.admin.query<{ code: string; name: string; channel: string; spend: string; platform_conversions: number; journeys: number; progressed: number; converted: number }>(
@@ -633,6 +635,7 @@ const EDITORS: Ctx['role'][] = ['marketing_head', 'data_steward'];
 
 export async function growthOverview(deps: Deps, ctx: Ctx, period: Period | DateRange, platform: string | null) {
   if (['partner_user', 'relationship_manager'].includes(ctx.role)) throw new HttpError(403, 'Social insights are not part of your role’s view.');
+  await refreshSampleSocial(ctx);
   return ctx.db.asUser(ctx.userId, async sql => {
     const accountsRaw = await sql.query<{ id: string; platform: string; name: string; handle: string | null; followers: number | null; is_competitor: boolean; profile_url: string | null }>(
       `select id, platform, name, handle, followers, is_competitor, profile_url from vt.social_accounts where tenant_id = $1 order by is_competitor, platform, name`, [ctx.tenantId]);

@@ -154,6 +154,25 @@ describe('social footprint end to end', () => {
     console.log(ins.map((i: any) => `${i.kind}: ${i.title}`).join('\n'));
   });
 
+  it('fills in a sample workspace created before social existed, and keeps it current', async () => {
+    const posts = async () => (await db.admin.query<{ n: number }>(`select count(*)::int as n from vt.social_posts where tenant_id = $1`, [ws]))[0]!.n;
+    // like a sample made before social and growth were built: no sample accounts at all
+    await db.admin.query(`delete from vt.social_competitors where tenant_id = $1`, [ws]);
+    await db.admin.query(`delete from vt.social_connections where tenant_id = $1 and provider = 'sample'`, [ws]);
+    expect(await posts()).toBe(0);
+    const g = await call(s.accessToken, 'GET', `/tenants/${ws}/social/growth?from=2026-10-04&to=2026-11-02`);
+    expect(g.status).toBe(200);
+    expect(await posts()).toBeGreaterThan(100);
+    expect(g.body.competitors.length).toBeGreaterThan(0);
+    expect(g.body.report.period.now.posts).toBeGreaterThan(0);
+    // two pages opening at once rebuild it once, not twice
+    await db.admin.query(`update vt.social_connections set last_sync_at = now() - interval '3 days' where tenant_id = $1 and provider = 'sample'`, [ws]);
+    const before = await posts();
+    await Promise.all([call(s.accessToken, 'GET', `/tenants/${ws}/social`), call(s.accessToken, 'GET', `/tenants/${ws}/social/growth`)]);
+    expect(await posts()).toBe(before);
+    expect((await db.admin.query(`select 1 from vt.social_connections where tenant_id = $1 and provider = 'sample'`, [ws])).length).toBe(1);
+  });
+
   it('keeps social away from partner users and relationship managers', async () => {
     await call(s.accessToken, 'POST', `/tenants/${ws}/sample/role`, { role: 'partner_user' });
     expect((await call(s.accessToken, 'GET', `/tenants/${ws}/social`)).status).toBe(403);
