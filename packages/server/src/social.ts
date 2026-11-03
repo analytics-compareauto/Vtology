@@ -10,7 +10,7 @@
  * Only brand-level data is stored: the brand's own accounts, posts and aggregate metrics. Comments
  * are counted, never stored, and nothing about individual followers is collected.
  */
-import { analyzeSocial, growthReport, hashValue, normalizeEmail, normalizePhone, type GAccount, type GDaily, type GPost, type Industry, type Period, type SocialAccount, type SocialPost } from '@vtology/core';
+import { analyzeSocial, growthReport, rangeOf, type DateRange, hashValue, normalizeEmail, normalizePhone, type GAccount, type GDaily, type GPost, type Industry, type Period, type SocialAccount, type SocialPost } from '@vtology/core';
 import { loadContext } from './context';
 import { runPipeline } from './pipeline';
 import { HttpError, requireRole, type Ctx, type Deps } from './context';
@@ -595,7 +595,7 @@ export async function disconnect(ctx: Ctx, connectionId: string) {
 }
 
 // ===================================================================== reading
-export async function socialOverview(deps: Deps, ctx: Ctx) {
+export async function socialOverview(deps: Deps, ctx: Ctx, range?: DateRange) {
   if (['partner_user', 'relationship_manager'].includes(ctx.role)) throw new HttpError(403, 'Social insights are not part of your role’s view.');
   // paid campaigns against the pipeline they produced (spend only for roles that see money)
     const seesMoney = ['marketing_head', 'finance'].includes(ctx.role);
@@ -611,13 +611,14 @@ export async function socialOverview(deps: Deps, ctx: Ctx) {
       `select id, platform, name, handle, followers, posts_count, profile_url, is_competitor from vt.social_accounts where tenant_id = $1 and not is_competitor order by platform, name`, [ctx.tenantId]);
     const postsRaw = await sql.query<{ id: string; account_id: string; posted_at: string; format: string; caption: string | null; permalink: string | null; views: string | null; reach: string | null; likes: string | null; comments: string | null; shares: string | null; saves: string | null; watch_minutes: string | null; avg_view_pct: string | null; thumbnail_url: string | null }>(
       `select id, account_id, posted_at, format, caption, permalink, thumbnail_url, views, reach, likes, comments, shares, saves, watch_minutes, avg_view_pct
-         from vt.social_posts where tenant_id = $1 and posted_at > now() - interval '200 days' and account_id in (select id from vt.social_accounts where tenant_id = $1 and not is_competitor) order by posted_at desc limit 2000`, [ctx.tenantId]);
+         from vt.social_posts where tenant_id = $1 and posted_at >= $2::date - ($3::date - $2::date) - 1 and posted_at < $3::date + 1 and account_id in (select id from vt.social_accounts where tenant_id = $1 and not is_competitor) order by posted_at desc limit 6000`,
+      [ctx.tenantId, (range ?? defaultRange(ctx.now, 180)).from, (range ?? defaultRange(ctx.now, 180)).to]);
     const num = (x: string | null) => (x === null ? null : Number(x));
     const platformOf = new Map(accountsRaw.map(a => [a.id, a.platform]));
     const accounts: SocialAccount[] = accountsRaw.map(a => ({ id: a.id, platform: a.platform, name: a.name, handle: a.handle, followers: a.followers }));
     const posts: SocialPost[] = postsRaw.map(p => ({ id: p.id, accountId: p.account_id, platform: platformOf.get(p.account_id)!, postedAt: new Date(p.posted_at), format: p.format, caption: p.caption, permalink: p.permalink, thumbnailUrl: p.thumbnail_url,
       views: num(p.views), reach: num(p.reach), likes: num(p.likes), comments: num(p.comments), shares: num(p.shares), saves: num(p.saves), watchMinutes: num(p.watch_minutes), avgViewPct: num(p.avg_view_pct) }));
-    const analysis = analyzeSocial(ctx.industry, accounts, posts, ctx.now);
+    const analysis = analyzeSocial(ctx.industry, accounts, posts, ctx.now, range ?? 180);
     return {
       canConnect: ['marketing_head', 'data_steward'].includes(ctx.role),
       providers: { meta: providerReady(deps.social, 'meta'), youtube: providerReady(deps.social, 'youtube'), linkedin: false, secret: !!deps.secretKey && deps.secretKey.length >= 32 },
@@ -630,16 +631,18 @@ export async function socialOverview(deps: Deps, ctx: Ctx) {
 // ===================================================================== growth and competitors
 const EDITORS: Ctx['role'][] = ['marketing_head', 'data_steward'];
 
-export async function growthOverview(deps: Deps, ctx: Ctx, period: Period, platform: string | null) {
+export async function growthOverview(deps: Deps, ctx: Ctx, period: Period | DateRange, platform: string | null) {
   if (['partner_user', 'relationship_manager'].includes(ctx.role)) throw new HttpError(403, 'Social insights are not part of your role’s view.');
   return ctx.db.asUser(ctx.userId, async sql => {
     const accountsRaw = await sql.query<{ id: string; platform: string; name: string; handle: string | null; followers: number | null; is_competitor: boolean; profile_url: string | null }>(
       `select id, platform, name, handle, followers, is_competitor, profile_url from vt.social_accounts where tenant_id = $1 order by is_competitor, platform, name`, [ctx.tenantId]);
     const postsRaw = await sql.query<{ id: string; account_id: string; posted_at: string; format: string; caption: string | null; permalink: string | null; thumbnail_url: string | null; likes: string | null; comments: string | null; shares: string | null; saves: string | null; views: string | null; reach: string | null; watch_minutes: string | null }>(
       `select id, account_id, posted_at, format, caption, permalink, thumbnail_url, likes, comments, shares, saves, views, reach, watch_minutes from vt.social_posts
-        where tenant_id = $1 and posted_at > now() - interval '200 days' order by posted_at desc limit 6000`, [ctx.tenantId]);
+        where tenant_id = $1 and posted_at >= $2::date - $3::int and posted_at < $4::date + 1 order by posted_at desc limit 12000`,
+      [ctx.tenantId, rangeOf(period, ctx.now).from, Math.max(120, 4 * daysOf(rangeOf(period, ctx.now))), rangeOf(period, ctx.now).to]);
     const dailyRaw = await sql.query<{ account_id: string; day: string; followers: number | null; new_followers: number | null }>(
-      `select account_id, day::text as day, followers, new_followers from vt.social_account_daily where tenant_id = $1 and day > current_date - 200 order by day`, [ctx.tenantId]);
+      `select account_id, day::text as day, followers, new_followers from vt.social_account_daily where tenant_id = $1 and day >= $2::date - $3::int and day <= $4::date order by day`,
+      [ctx.tenantId, rangeOf(period, ctx.now).from, daysOf(rangeOf(period, ctx.now)) + 1, rangeOf(period, ctx.now).to]);
     const competitors = await sql.query<{ id: string; platform: string; handle: string; account_id: string | null; last_error: string | null; added_at: string }>(
       `select id, platform, handle, account_id, last_error, added_at from vt.social_competitors where tenant_id = $1 order by platform, added_at`, [ctx.tenantId]);
     const connections = await sql.query<{ provider: string; status: string }>(`select provider, status from vt.social_connections where tenant_id = $1`, [ctx.tenantId]);
@@ -679,3 +682,6 @@ export async function removeCompetitor(ctx: Ctx, id: string) {
   if (row.account_id) await ctx.db.admin.query(`delete from vt.social_accounts where id = $1 and tenant_id = $2 and is_competitor`, [row.account_id, ctx.tenantId]);
   return { removed: true };
 }
+
+const daysOf = (r: DateRange) => Math.round((Date.parse(r.to) - Date.parse(r.from)) / 86_400_000) + 1;
+const defaultRange = (now: Date, days: number): DateRange => ({ from: new Date(now.getTime() - (days - 1) * 86_400_000).toISOString().slice(0, 10), to: now.toISOString().slice(0, 10) });

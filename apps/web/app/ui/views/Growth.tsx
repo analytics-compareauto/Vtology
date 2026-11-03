@@ -1,27 +1,26 @@
 'use client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Action, BenchRow, GrowthReport, IndustryPost, Period, Tag, Trend } from '@vtology/core';
+import type { Action, BenchRow, GrowthReport, IndustryPost, Tag, Trend } from '@vtology/core';
 import type { WorkspaceData } from '../Dashboard';
 import { api, ApiError } from '../api';
 import { change, compact, num, pct } from '../format';
 import { BarChart, LineChart } from '../charts';
 import { IconImage, IconPlay, IconRefresh, IconSpark } from '../icons';
+import { DateRangePicker, daysIn, previousText, rangeQuery, rangeText, type Range } from '../DateRange';
 
 interface Competitor { id: string; platform: string; handle: string; account_id: string | null; last_error: string | null; added_at: string }
 interface GrowthData { canEdit: boolean; connected: string[]; isSample: boolean; accounts: { id: string; platform: string; name: string; handle: string | null; followers: number | null; isCompetitor: boolean }[]; competitors: Competitor[]; report: GrowthReport }
 
 const PLATFORM: Record<string, string> = { instagram: 'Instagram', facebook: 'Facebook', youtube: 'YouTube', linkedin: 'LinkedIn' };
 const SHORT: Record<string, string> = { instagram: 'IG', facebook: 'FB', youtube: 'YT', linkedin: 'IN' };
-const PERIODS: { id: Period; label: string; noun: string }[] = [{ id: 'week', label: 'Week', noun: 'week' }, { id: 'month', label: 'Month', noun: '30 days' }, { id: 'quarter', label: 'Quarter', noun: '90 days' }];
 // you first, then competitors in fixed order (validated categorical slots)
 const SERIES = ['var(--s-facebook)', 'var(--s-instagram)', 'var(--s-youtube)', 'var(--s-linkedin)', '#e87ba4', '#eda100', '#008300', '#e34948'];
 const dayLabel = (iso: string) => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
 const handleOf = (h: string | null) => (h ? (h.startsWith('@') ? h : '@' + h) : '');
 
-export function Growth({ data, workspaceId, notify }: { data: WorkspaceData; workspaceId: string; notify: (m: string) => void }) {
+export function Growth({ data, workspaceId, notify, range, onRange }: { data: WorkspaceData; workspaceId: string; notify: (m: string) => void; range: Range; onRange: (r: Range) => void }) {
   const [g, setG] = useState<GrowthData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [period, setPeriod] = useState<Period>('month');
   const [platform, setPlatform] = useState<string>('all');
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -29,11 +28,11 @@ export function Growth({ data, workspaceId, notify }: { data: WorkspaceData; wor
 
   const load = useCallback(() => {
     setLoading(true);
-    return api<GrowthData>('GET', `${T}/social/growth?period=${period}${platform !== 'all' ? `&platform=${platform}` : ''}`)
+    return api<GrowthData>('GET', `${T}/social/growth?${rangeQuery(range)}${platform !== 'all' ? `&platform=${platform}` : ''}`)
       .then(r => { setG(r); setError(null); })
       .catch(e => setError(e instanceof ApiError ? e.message : 'Could not load growth data.'))
       .finally(() => setLoading(false));
-  }, [T, period, platform]);
+  }, [T, range, platform]);
   useEffect(() => { load(); }, [load]);
 
   async function syncNow() {
@@ -52,7 +51,7 @@ export function Growth({ data, workspaceId, notify }: { data: WorkspaceData; wor
 
   const r = g.report;
   const p = r.period, now = p.now, before = p.before;
-  const per = PERIODS.find(x => x.id === period)!;
+  const span = `${daysIn(range)} days`;
   const ownPlatforms = [...new Set(g.accounts.filter(a => !a.isCompetitor).map(a => a.platform))];
   // compare only where there is someone to compare with
   const benchPlatforms = Object.keys(r.benchmark).filter(pl => r.benchmark[pl]!.some(x => !x.isYou) && (platform === 'all' || pl === platform));
@@ -74,9 +73,7 @@ export function Growth({ data, workspaceId, notify }: { data: WorkspaceData; wor
             <button aria-pressed={platform === 'all'} onClick={() => setPlatform('all')}>All platforms</button>
             {['instagram', 'facebook', 'youtube'].filter(pl => ownPlatforms.includes(pl) || g.competitors.some(c => c.platform === pl)).map(pl => <button key={pl} aria-pressed={platform === pl} onClick={() => setPlatform(pl)}>{PLATFORM[pl]}</button>)}
           </div>
-          <div className="seg" role="group" aria-label="Period">
-            {PERIODS.map(x => <button key={x.id} aria-pressed={period === x.id} onClick={() => setPeriod(x.id)}>{x.label}</button>)}
-          </div>
+          <DateRangePicker value={range} onChange={onRange} />
         </div>
         <div className="toolbar">
           {g.connected.length > 0 && !g.isSample && <button className="btn" onClick={syncNow} disabled={syncing} title="Your accounts and every competitor. Also runs on its own every morning."><IconRefresh />{syncing ? 'Syncing… (up to a minute)' : 'Sync now'}</button>}
@@ -87,15 +84,15 @@ export function Growth({ data, workspaceId, notify }: { data: WorkspaceData; wor
 
       <div className="print-only" style={{ display: 'none' }}>
         <h1>{data.me.tenantName}: growth report</h1>
-        <p className="muted">{scopeName}, last {per.noun} ({dayLabel(p.from)} to {dayLabel(p.to)}) against the {per.noun} before. Prepared with Vtology.</p>
+        <p className="muted">{scopeName}, {rangeText(range)} against {previousText(range)}. Prepared with Vtology.</p>
       </div>
 
       {/* the period in one line, then the numbers */}
       <section className="panel">
         <div className="panel-head" style={{ marginBottom: 14 }}>
           <div>
-            <h2>Last {per.noun}: {bits.join(', ')}</h2>
-            <p>{dayLabel(p.from)} to {dayLabel(p.to)} compared with {dayLabel(p.prevFrom)} to {dayLabel(p.from)}, {scopeName}, your accounts only.</p>
+            <h2>{rangeText(range)}: {bits.join(', ')}</h2>
+            <p>Against the {span} before ({previousText(range)}), {scopeName}, your accounts only.</p>
           </div>
         </div>
         <div className="kpis" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
@@ -128,7 +125,7 @@ export function Growth({ data, workspaceId, notify }: { data: WorkspaceData; wor
       )}
 
       {benchPlatforms.map(pl => (
-        <PlatformBlock key={pl} pl={pl} rows={r.benchmark[pl]!} trends={r.trends[pl] ?? []} tags={r.hashtags[pl] ?? []} posts={(r.topPosts[pl] ?? []).slice(0, platform === 'all' ? 4 : 8)} />
+        <PlatformBlock key={pl} label={rangeText(range)} pl={pl} rows={r.benchmark[pl]!} trends={r.trends[pl] ?? []} tags={r.hashtags[pl] ?? []} posts={(r.topPosts[pl] ?? []).slice(0, platform === 'all' ? 4 : 8)} />
       ))}
       {platform === 'facebook' && (
         <section className="panel" style={{ borderStyle: 'dashed' }}>
@@ -138,7 +135,7 @@ export function Growth({ data, workspaceId, notify }: { data: WorkspaceData; wor
       )}
 
       <Competitors g={g} workspaceId={workspaceId} notify={notify} reload={load} />
-      <p className="muted small">How this is measured: competitors are compared on public numbers (likes and comments; views on YouTube). Engagement per follower is likes and comments on a post divided by the account’s followers, the standard measure for comparing accounts of different sizes. “Usual” means the typical (median) post of that same account over the last four months.</p>
+      <p className="muted small">How this is measured: competitors are compared on public numbers (likes and comments; views on YouTube). Engagement per follower is likes and comments on a post divided by the account’s followers, the standard measure for comparing accounts of different sizes. “Usual” means the typical (median) post of that same account over at least the four months up to the end date.</p>
     </div>
   );
 }
@@ -224,7 +221,7 @@ function PlanItem({ a }: { a: Action }) {
   );
 }
 
-function PlatformBlock({ pl, rows, trends, tags, posts }: { pl: string; rows: BenchRow[]; trends: Trend[]; tags: Tag[]; posts: IndustryPost[] }) {
+function PlatformBlock({ pl, rows, trends, tags, posts, label }: { label: string; pl: string; rows: BenchRow[]; trends: Trend[]; tags: Tag[]; posts: IndustryPost[] }) {
   const name = PLATFORM[pl]!;
   const you = rows.find(r => r.isYou);
   const comps = rows.filter(r => !r.isYou);
@@ -244,12 +241,12 @@ function PlatformBlock({ pl, rows, trends, tags, posts }: { pl: string; rows: Be
           <div>
             <h2 style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span className={`pf ${pl}`}>{SHORT[pl]}</span>
               {you && comps.length ? (you.comparable ? `${name}: you rank #${rank} of ${byEr.length} on engagement${cad !== null ? `, and post ${you.postsPerWeek.toFixed(1)} times a week against ${cad.toFixed(1)}` : ''}` : `${name}: competitors are up to ${compact(sizeGap)}× your size and post ${cad !== null ? `${cad.toFixed(1)} times a week against your ${you.postsPerWeek.toFixed(1)}` : 'more often'}`) : `${name}: you and your competitors`}</h2>
-            <p>Last 4 weeks for posting and share of voice; last 4 months for engagement. Your row is highlighted.{you && !you.comparable ? ' Engagement per follower is greyed out where accounts differ in size by more than 10×: a small account’s posts often reach people beyond its followers, which inflates the rate.' : ''}</p>
+            <p>{label} for posting, growth and share of voice; engagement against at least 4 months of posts. Your row is highlighted.{you && !you.comparable ? ' Engagement per follower is greyed out where accounts differ in size by more than 10×: a small account’s posts often reach people beyond its followers, which inflates the rate.' : ''}</p>
           </div>
         </div>
         <div className="table-wrap" style={{ boxShadow: 'none' }}>
           <table className="bench">
-            <thead><tr><th>Account</th><th>Followers</th><th className="num">Growth, 30 days</th><th className="num">Posts a week</th><th>Engagement per follower</th><th>Most used format</th><th>Share of voice</th></tr></thead>
+            <thead><tr><th>Account</th><th>Followers</th><th className="num">Follower growth</th><th className="num">Posts a week</th><th>Engagement per follower</th><th>Most used format</th><th>Share of voice</th></tr></thead>
             <tbody>
               {rows.map(r => (
                 <tr key={r.accountId} className={r.isYou ? 'you' : ''}>
@@ -271,7 +268,7 @@ function PlatformBlock({ pl, rows, trends, tags, posts }: { pl: string; rows: Be
         <section className="panel">
           <div className="panel-head"><div>
             <h2>{rising.length ? `Rising on ${name}: ${rising.slice(0, 2).map(t => t.label.toLowerCase()).join(' and ')}` : `What’s trending on ${name}`}</h2>
-            <p>Across you and your competitors: the last 4 weeks against the 3 months before. Engagement is against each account’s usual post.</p>
+            <p>Across you and your competitors: {label} against the three periods of the same length before it. Engagement is against each account’s usual post.</p>
           </div></div>
           {trends.length === 0 ? <div className="empty">Needs a few more posts from you and your competitors.</div> : (
             <div className="trends">
@@ -287,7 +284,7 @@ function PlatformBlock({ pl, rows, trends, tags, posts }: { pl: string; rows: Be
           )}
         </section>
         <section className="panel">
-          <div className="panel-head"><div><h2>Formats that win on {name}</h2><p>Engagement against each account’s usual post, last 4 weeks, everyone in the set. Under each: its share of industry posts, and of yours.</p></div></div>
+          <div className="panel-head"><div><h2>Formats that win on {name}</h2><p>Engagement against each account’s usual post, {label}, everyone in the set. Under each: its share of industry posts, and of yours.</p></div></div>
           {formats.length === 0 ? <div className="empty">Not enough recent posts.</div> : (
             <div className="lift-list">
               {formats.map(f => {
@@ -304,7 +301,7 @@ function PlatformBlock({ pl, rows, trends, tags, posts }: { pl: string; rows: Be
           )}
           {tags.length > 0 && (
             <div style={{ marginTop: 18 }}>
-              <h3 style={{ fontSize: 15, marginBottom: 8 }}>Hashtags in use, last 30 days</h3>
+              <h3 style={{ fontSize: 15, marginBottom: 8 }}>Hashtags in use, {label}</h3>
               <div className="tags">{tags.slice(0, 12).map(t => <span key={t.tag} className={`hashtag${(t.lift ?? 0) >= 1.2 ? ' good' : ''}`} title={`${t.posts} posts by ${t.accounts} accounts`}>{t.tag}<em>{t.accounts} acc{t.lift !== null ? `, ${t.lift >= 1 ? '+' : '−'}${Math.abs(Math.round((t.lift - 1) * 100))}%` : ''}</em></span>)}</div>
             </div>
           )}
@@ -313,7 +310,7 @@ function PlatformBlock({ pl, rows, trends, tags, posts }: { pl: string; rows: Be
 
       {posts.length > 0 && (
         <section className="panel">
-          <div className="panel-head"><div><h2>Best posts in your industry on {name}, last 30 days</h2><p>Ranked by engagement against each account’s usual post, so a smaller account’s hit counts as much as a big one’s. Open any to see what they did.</p></div></div>
+          <div className="panel-head"><div><h2>Best posts in your industry on {name}, {label}</h2><p>Ranked by engagement against each account’s usual post, so a smaller account’s hit counts as much as a big one’s. Open any to see what they did.</p></div></div>
           <div className="posts">{posts.slice(0, 8).map(p => <IndustryCard key={p.id} p={p} />)}</div>
         </section>
       )}

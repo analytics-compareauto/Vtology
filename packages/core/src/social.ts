@@ -38,7 +38,13 @@ export interface PlatformSummary {
 export interface SocialView { platform: string | null; rated: number; segments: Segment[]; insights: Insight[]; top: ScoredPost[]; bottom: ScoredPost[] }
 export interface SocialAnalysis {
   windowDays: number;
+  /** the window as dates, both ends included */
+  from: string; to: string;
   posts: number;
+  /** Day by day (IST), per platform, inside the window. */
+  daily: { day: string; platform: string; posts: number; interactions: number; views: number; reach: number; watchHours: number }[];
+  /** The same totals for the period of the same length just before. */
+  previous: PlatformSummary[];
   /** Week by week, per platform. Weeks start Monday, IST. */
   weekly: { week: string; platform: string; posts: number; interactions: number; views: number; reach: number; watchHours: number }[];
   /** Posts left out of comparisons because too few people saw them for a ratio to mean anything. */
@@ -233,9 +239,28 @@ function viewOf(industry: Industry, rated: ScoredPost[], platform: string | null
   };
 }
 
-export function analyzeSocial(industry: Industry, accounts: SocialAccount[], posts: SocialPost[], now: Date, windowDays = 180): SocialAnalysis {
-  const since = now.getTime() - windowDays * 86_400_000;
-  const inWindow = posts.filter(p => p.postedAt.getTime() >= since);
+/** Totals per platform over a set of scored posts. */
+function summarize(scored: ScoredPost[], platforms: string[]): PlatformSummary[] {
+  return platforms.map(pl => {
+    const ps = scored.filter(p => p.platform === pl);
+    const es = ps.filter(p => p.engagement !== null).map(p => p.engagement!);
+    const withViews = ps.filter(p => typeof p.views === 'number'), withReach = ps.filter(p => typeof p.reach === 'number'), withWatch = ps.filter(p => typeof p.watchMinutes === 'number' && p.watchMinutes > 0);
+    return { platform: pl, posts: ps.length, interactions: ps.reduce((s, p) => s + p.interactions, 0),
+      views: withViews.length ? withViews.reduce((s, p) => s + n0(p.views), 0) : null, reach: withReach.length ? withReach.reduce((s, p) => s + n0(p.reach), 0) : null,
+      viewsPosts: withViews.length, reachPosts: withReach.length,
+      watchHours: withWatch.length ? withWatch.reduce((s, p) => s + n0(p.watchMinutes), 0) / 60 : null, watchPosts: withWatch.length, medianEngagement: es.length ? median(es) : null };
+  });
+}
+
+/** Analysis over a window: the last N days, or a date range (YYYY-MM-DD, both ends included).
+ *  The same-length period just before is summarised too, for "against the previous period". */
+export function analyzeSocial(industry: Industry, accounts: SocialAccount[], posts: SocialPost[], now: Date, window: number | { from: string; to: string } = 180): SocialAnalysis {
+  const DAYMS = 86_400_000;
+  const end = typeof window === 'number' ? now.getTime() + 1 : Date.parse(window.to) + DAYMS;
+  const since = typeof window === 'number' ? now.getTime() - window * DAYMS : Date.parse(window.from);
+  const windowDays = Math.max(1, Math.round((end - since) / DAYMS));
+  const inWindow = posts.filter(p => p.postedAt.getTime() >= since && p.postedAt.getTime() < end);
+  const prevWindow = posts.filter(p => p.postedAt.getTime() >= since - windowDays * DAYMS && p.postedAt.getTime() < since);
   const acc = new Map(accounts.map(a => [a.id, a]));
   const scored0 = inWindow.map(p => score(industry, p, acc.get(p.accountId)?.followers));
   // lift: engagement relative to the same account's median, so platforms and account sizes are comparable
@@ -255,19 +280,15 @@ export function analyzeSocial(industry: Industry, accounts: SocialAccount[], pos
   const insights = Object.values(perPlatform).flatMap(v => v.insights).sort((a, b) => b.strength - a.strength);
   if (!insights.some(i => i.kind === 'try') && rated.length >= 6) insights.push({ kind: 'try', strength: 1, title: 'Run a two-week content test', detail: 'No clear winner yet. Alternate two themes on the same days and times so the comparison is fair.' });
 
+  const prevScored: ScoredPost[] = prevWindow.map(p => ({ ...score(industry, p, acc.get(p.accountId)?.followers), lift: null }));
+  const allPlatforms = [...new Set([...platforms, ...prevScored.map(p => p.platform)])];
   return {
-    windowDays, posts: scored.length,
+    windowDays, from: new Date(since).toISOString().slice(0, 10), to: new Date(end - 1).toISOString().slice(0, 10), posts: scored.length,
     lowAudience: scored.filter(p => p.engagement === null).length,
     weekly: weeklyOf(scored),
-    byPlatform: platforms.map(pl => {
-      const ps = scored.filter(p => p.platform === pl);
-      const es = ps.filter(p => p.engagement !== null).map(p => p.engagement!);
-      const withViews = ps.filter(p => typeof p.views === 'number'), withReach = ps.filter(p => typeof p.reach === 'number'), withWatch = ps.filter(p => typeof p.watchMinutes === 'number' && p.watchMinutes > 0);
-      return { platform: pl, posts: ps.length, interactions: ps.reduce((s, p) => s + p.interactions, 0),
-        views: withViews.length ? withViews.reduce((s, p) => s + n0(p.views), 0) : null, reach: withReach.length ? withReach.reduce((s, p) => s + n0(p.reach), 0) : null,
-        viewsPosts: withViews.length, reachPosts: withReach.length,
-        watchHours: withWatch.length ? withWatch.reduce((s, p) => s + n0(p.watchMinutes), 0) / 60 : null, watchPosts: withWatch.length, medianEngagement: es.length ? median(es) : null };
-    }),
+    daily: dailyOf(scored),
+    byPlatform: summarize(scored, platforms),
+    previous: summarize(prevScored, allPlatforms),
     segments: all.segments, insights, top: all.top, bottom: all.bottom, perPlatform,
   };
 }
@@ -288,4 +309,15 @@ function weeklyOf(posts: ScoredPost[]): SocialAnalysis['weekly'] {
     m.set(k, w);
   }
   return [...m.values()].sort((a, b) => a.week.localeCompare(b.week) || a.platform.localeCompare(b.platform));
+}
+
+function dailyOf(posts: ScoredPost[]): SocialAnalysis['daily'] {
+  const m = new Map<string, SocialAnalysis['daily'][number]>();
+  for (const p of posts) {
+    const day = new Date(p.postedAt.getTime() + 330 * 60_000).toISOString().slice(0, 10), k = `${day}|${p.platform}`;
+    const w = m.get(k) ?? { day, platform: p.platform, posts: 0, interactions: 0, views: 0, reach: 0, watchHours: 0 };
+    w.posts++; w.interactions += p.interactions; w.views += n0(p.views); w.reach += n0(p.reach); w.watchHours += n0(p.watchMinutes) / 60;
+    m.set(k, w);
+  }
+  return [...m.values()].sort((a, b) => a.day.localeCompare(b.day) || a.platform.localeCompare(b.platform));
 }

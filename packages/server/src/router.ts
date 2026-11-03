@@ -76,12 +76,13 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
     const route = `${req.method} ${parts.slice(2).join('/')}`;
 
     if (route === 'GET me') return json(200, await me(ctx));
-    if (route === 'GET social') return json(200, await socialOverview(deps, ctx));
+    if (route === 'GET social') return json(200, await socialOverview(deps, ctx, rangeParam(url, ctx.now, 180)));
     if (route === 'POST social/sync') return json(200, await syncTenant(deps, ctx));
     if (route === 'GET social/growth') {
       const per = url.searchParams.get('period');
       const pl = url.searchParams.get('platform');
-      return json(200, await growthOverview(deps, ctx, per === 'week' || per === 'quarter' ? per : 'month', pl && ['instagram', 'facebook', 'youtube'].includes(pl) ? pl : null));
+      const range = url.searchParams.get('from') ? rangeParam(url, ctx.now, 30) : (per === 'week' || per === 'quarter' ? per : 'month');
+      return json(200, await growthOverview(deps, ctx, range, pl && ['instagram', 'facebook', 'youtube'].includes(pl) ? pl : null));
     }
     if (route === 'POST social/competitors') {
       const b = await req.json().catch(() => ({})) as { platform?: unknown; handle?: unknown };
@@ -118,4 +119,17 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
 async function internalCronKey(secret: string): Promise<string> {
   const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`vtology-cron:${secret}`));
   return Buffer.from(d).toString('hex');
+}
+
+/** ?from=YYYY-MM-DD&to=YYYY-MM-DD (both included); defaults to the last `days` days. At most 2 years back, 400 days long. */
+function rangeParam(url: URL, now: Date, days: number): { from: string; to: string } {
+  const ok = (x: string | null) => !!x && /^\d{4}-\d{2}-\d{2}$/.test(x) && !Number.isNaN(Date.parse(x));
+  const today = new Date(now.getTime() + 330 * 60_000).toISOString().slice(0, 10);
+  let to = url.searchParams.get('to'), from = url.searchParams.get('from');
+  if (!ok(to) || to! > today) to = today;
+  if (!ok(from) || from! > to!) from = new Date(Date.parse(to!) - (days - 1) * 86_400_000).toISOString().slice(0, 10);
+  const earliest = new Date(Date.parse(today) - 730 * 86_400_000).toISOString().slice(0, 10);
+  if (from! < earliest) from = earliest;
+  if (Date.parse(to!) - Date.parse(from!) > 400 * 86_400_000) from = new Date(Date.parse(to!) - 400 * 86_400_000).toISOString().slice(0, 10);
+  return { from: from!, to: to! };
 }

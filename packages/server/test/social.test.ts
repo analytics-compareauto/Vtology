@@ -116,11 +116,26 @@ describe('social footprint end to end', () => {
     const g = growthReport('Automotive', accounts, posts, daily, NOW, 'month');
     expect(g.period.now.newFollowers).toBeNull();
     const rows = g.benchmark.instagram!;
-    expect(rows.find(r => r.isYou)!.postsPerWeek).toBe(2); // 8 posts in the 28-day window, both ends included
+    expect(rows.find(r => r.isYou)!.postsPerWeek).toBeCloseTo(8 / (30 / 7), 2); // 8 posts in the 30 days selected
     expect(rows.find(r => !r.isYou)!.postsPerWeek).toBeGreaterThanOrEqual(7);
     expect(g.trends.instagram!.find(t => t.dimension === 'format' && t.key === 'reel')!.status).toBe('rising');
     expect(g.plan.some(a => /Post more often on Instagram/.test(a.title))).toBe(true);
     expect(g.plan.length).toBeLessThanOrEqual(6);
+  });
+
+  it('analyses any date range against the same number of days just before', () => {
+    const D = 86_400_000;
+    const acc = [{ id: 'ig', platform: 'instagram' as const, name: 'x', followers: 5000 }];
+    // one post a day for 60 days: 100 interactions each in the last 30 days, 50 each before
+    const posts = Array.from({ length: 60 }, (_, i) => ({ id: `p${i}`, accountId: 'ig', platform: 'instagram' as const, externalId: `p${i}`,
+      postedAt: new Date(Date.parse('2026-11-01T06:00:00Z') - i * D), format: 'image', caption: 'Creta vs Seltos', reach: 1000, likes: i < 30 ? 100 : 50, comments: 0 }));
+    const a = analyzeSocial('Automotive', acc as never, posts as never, NOW, { from: '2026-10-03', to: '2026-11-01' });
+    expect(a.from).toBe('2026-10-03');
+    expect(a.windowDays).toBe(30);
+    expect(a.byPlatform[0]!.posts).toBe(30);
+    expect(a.byPlatform[0]!.interactions).toBe(3000);
+    expect(a.previous[0]!.interactions).toBe(1500);
+    expect(a.daily.length).toBe(30);
   });
 
   it('sample workspaces come with a sample social footprint and findings', async () => {

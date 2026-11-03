@@ -15,9 +15,11 @@ export interface GPost { id: string; accountId: string; platform: string; posted
   likes?: number | null; comments?: number | null; shares?: number | null; saves?: number | null; views?: number | null; reach?: number | null; watchMinutes?: number | null }
 export interface GDaily { accountId: string; day: string; followers: number | null; newFollowers?: number | null }
 export type Period = 'week' | 'month' | 'quarter';
+/** A date range, both ends included, as YYYY-MM-DD (IST calendar days). */
+export interface DateRange { from: string; to: string }
 
 export interface PeriodNumbers { posts: number; interactions: number; views: number | null; reach: number | null; watchHours: number | null; newFollowers: number | null; engagementPerPost: number | null }
-export interface PeriodCompare { period: Period; days: number; from: string; to: string; prevFrom: string; now: PeriodNumbers; before: PeriodNumbers; followersNow: number | null; followersBefore: number | null }
+export interface PeriodCompare { label: string; days: number; from: string; to: string; prevFrom: string; now: PeriodNumbers; before: PeriodNumbers; followersNow: number | null; followersBefore: number | null }
 export interface BenchRow {
   accountId: string; name: string; handle: string | null; platform: string; isYou: boolean; followers: number | null;
   /** follower change over the tracked days (null until there are 2 snapshots at least 6 days apart) */
@@ -79,9 +81,21 @@ function followersAt(daily: GDaily[], accountId: string, t: number): number | nu
   return best?.followers ?? null;
 }
 
-export function growthReport(industry: Industry, accounts: GAccount[], posts: GPost[], daily: GDaily[], now: Date, period: Period = 'month', platformFilter: string | null = null): GrowthReport {
-  const T = now.getTime();
-  const days = PERIOD_DAYS[period];
+/** 'month' and friends as a range ending today. */
+export function rangeOf(period: Period | DateRange, now: Date): DateRange {
+  if (typeof period === 'object') return period;
+  const to = iso(now.getTime());
+  return { from: iso(Date.parse(to) - (PERIOD_DAYS[period] - 1) * DAY), to };
+}
+const fmtDay = (iso: string) => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+
+export function growthReport(industry: Industry, accounts: GAccount[], posts: GPost[], daily: GDaily[], now: Date, period: Period | DateRange = 'month', platformFilter: string | null = null): GrowthReport {
+  // the selected dates: everything on the page is measured inside them, against the same length before
+  const range = rangeOf(period, now);
+  const start = Date.parse(range.from), T = Date.parse(range.to) + DAY;
+  const days = Math.max(1, Math.round((T - start) / DAY));
+  const label = `${fmtDay(range.from)} to ${fmtDay(range.to)}`;
+  const isCurrent = T >= now.getTime() - DAY;
   const inScope = (pl: string) => !platformFilter || pl === platformFilter;
   const accs = accounts.filter(a => inScope(a.platform));
   const accIds = new Set(accs.map(a => a.id));
@@ -90,13 +104,14 @@ export function growthReport(industry: Industry, accounts: GAccount[], posts: GP
   const acc = new Map(accs.map(a => [a.id, a]));
 
   // ---- period against the one before
-  const from = T - days * DAY, prevFrom = T - 2 * days * DAY;
-  const followersNow = own.reduce<number | null>((s, a) => (a.followers === null ? s : n0(s) + a.followers), null);
+  const from = start, prevFrom = start - days * DAY;
+  const followersNow = isCurrent ? own.reduce<number | null>((s, a) => (a.followers === null ? s : n0(s) + a.followers), null)
+    : (() => { const xs = own.map(a => followersAt(daily, a.id, T - DAY)); return xs.every(x => x === null) ? null : xs.reduce<number>((t, x) => t + n0(x), 0); })();
   const before = own.map(a => followersAt(daily, a.id, from));
   const followersBefore = before.every(x => x === null) ? null : before.reduce<number>((s, x) => s + n0(x), 0);
   const periodCompare: PeriodCompare = {
-    period, days, from: iso(from), to: iso(T), prevFrom: iso(prevFrom),
-    now: periodNumbers(ps, daily, ownIds, from, T + DAY), before: periodNumbers(ps, daily, ownIds, prevFrom, from),
+    label, days, from: range.from, to: range.to, prevFrom: iso(prevFrom),
+    now: periodNumbers(ps, daily, ownIds, from, T), before: periodNumbers(ps, daily, ownIds, prevFrom, from),
     followersNow, followersBefore,
   };
 
@@ -112,8 +127,11 @@ export function growthReport(industry: Industry, accounts: GAccount[], posts: GP
   }
   const newFollowersWeekly = [...nfw.entries()].map(([k, v]) => { const [week, accountId] = k.split('|'); return { week: week!, accountId: accountId!, newFollowers: v }; }).sort((a, b) => a.week.localeCompare(b.week));
 
-  // ---- per post engagement per follower, and lift against the account's own typical post (last 120 days)
-  const recentPosts = ps.filter(p => p.postedAt.getTime() >= T - 120 * DAY);
+  // ---- per post engagement per follower, and lift against the account's own typical post
+  // (at least 120 days, so "usual" is stable even for a short range)
+  const lookback = Math.max(120, days * 4);
+  const recentPosts = ps.filter(p => p.postedAt.getTime() >= T - lookback * DAY && p.postedAt.getTime() < T);
+  const inRange = (p: GPost) => p.postedAt.getTime() >= start && p.postedAt.getTime() < T;
   const er = (p: GPost) => { const f = acc.get(p.accountId)?.followers; return f && f >= 50 ? publicEngagement(p) / f : null; };
   const accMedian = new Map<string, number>();
   for (const a of accs) accMedian.set(a.id, median(recentPosts.filter(p => p.accountId === a.id && er(p) !== null).map(p => er(p)!)));
@@ -124,21 +142,22 @@ export function growthReport(industry: Industry, accounts: GAccount[], posts: GP
   for (const pl of platforms) {
     const plAccs = accs.filter(a => a.platform === pl);
     const plPosts = recentPosts.filter(p => p.platform === pl);
-    const last30 = plPosts.filter(p => p.postedAt.getTime() >= T - 30 * DAY);
+    const last30 = plPosts.filter(inRange);
     const voiceTotal = last30.reduce((s, p) => s + publicEngagement(p), 0);
     benchmark[pl] = plAccs.map(a => {
       const mine = plPosts.filter(p => p.accountId === a.id);
-      const last28 = mine.filter(p => p.postedAt.getTime() >= T - 28 * DAY);
+      const last28 = mine.filter(inRange);
       const ers = mine.map(er).filter((x): x is number => x !== null);
       const fmt = new Map<string, number>(); mine.forEach(p => fmt.set(p.format, (fmt.get(p.format) ?? 0) + 1));
       const top = [...fmt.entries()].sort((x, y) => y[1] - x[1])[0];
       const hist = daily.filter(d => d.accountId === a.id && d.followers !== null).sort((x, y) => x.day.localeCompare(y.day));
-      const firstIn30 = hist.find(d => Date.parse(d.day) >= T - 31 * DAY) ?? null, last = hist[hist.length - 1] ?? null;
+      const inHist = hist.filter(d => Date.parse(d.day) < T);
+      const firstIn30 = inHist.find(d => Date.parse(d.day) >= start - DAY) ?? null, last = inHist[inHist.length - 1] ?? null;
       const growthDays = firstIn30 && last ? Math.round((Date.parse(last.day) - Date.parse(firstIn30.day)) / DAY) : 0;
       return {
         accountId: a.id, name: a.name, handle: a.handle, platform: pl, isYou: !a.isCompetitor, followers: a.followers,
         growth: firstIn30 && last && growthDays >= 6 && firstIn30.followers ? (last.followers! - firstIn30.followers) / firstIn30.followers : null, growthDays,
-        postsPerWeek: last28.length / 4, erPerPost: ers.length ? median(ers) : null,
+        postsPerWeek: last28.length / (days / 7), erPerPost: ers.length ? median(ers) : null,
         interactionsPerPost: mine.length ? median(mine.map(publicEngagement)) : null,
         topFormat: top ? labelOf(industry, 'format', top[0]) : null, topFormatShare: top && mine.length ? top[1] / mine.length : null,
         shareOfVoice: voiceTotal ? last30.filter(p => p.accountId === a.id).reduce((s, p) => s + publicEngagement(p), 0) / voiceTotal : 0,
@@ -150,8 +169,9 @@ export function growthReport(industry: Industry, accounts: GAccount[], posts: GP
       for (const r of benchmark[pl]!) r.comparable = !!r.followers && mf > 0 && mf / r.followers <= 10 && r.followers / mf <= 10; }
 
     // ---- what's rising: last 4 weeks against the 12 before, across everyone in the set
-    const recent = plPosts.filter(p => p.postedAt.getTime() >= T - 28 * DAY), earlier = plPosts.filter(p => p.postedAt.getTime() < T - 28 * DAY);
-    const youRecent = plPosts.filter(p => ownIds.has(p.accountId));
+    // the selected dates against the three periods of the same length before them (at least 4 weeks)
+    const recent = plPosts.filter(inRange), earlier = plPosts.filter(p => p.postedAt.getTime() < start && p.postedAt.getTime() >= start - Math.max(28, days * 3) * DAY);
+    const youRecent = recent.filter(p => ownIds.has(p.accountId));
     const keysOf = (dim: Dimension, p: GPost): string[] => dim === 'theme' ? themesOf(industry, p.caption).filter(k => k !== 'other') : dim === 'format' ? [p.format] : [timeBandOf(p.postedAt)];
     const out: Trend[] = [];
     for (const dim of ['format', 'theme', 'time'] as Dimension[]) {
@@ -194,27 +214,27 @@ export function growthReport(industry: Industry, accounts: GAccount[], posts: GP
     const name = PL[pl] ?? pl;
     const compCadence = median(comps.map(c => c.postsPerWeek));
     if (compCadence >= 2 && you.postsPerWeek < compCadence * 0.6)
-      plan.push({ platform: pl, impact: 'high', title: `Post more often on ${name}`, why: `Reach and new followers follow posting frequency. You post ${you.postsPerWeek.toFixed(1)} times a week; competitors post ${compCadence.toFixed(1)}.`, evidence: `Last 4 weeks, ${comps.length} competitors` });
+      plan.push({ platform: pl, impact: 'high', title: `Post more often on ${name}`, why: `Reach and new followers follow posting frequency. You post ${you.postsPerWeek.toFixed(1)} times a week; competitors post ${compCadence.toFixed(1)}.`, evidence: `${label}, ${comps.length} competitors` });
     const compGrowth = comps.map(c => c.growth).filter((x): x is number => x !== null);
     if (you.growth !== null && compGrowth.length && you.growth < median(compGrowth))
-      plan.push({ platform: pl, impact: 'high', title: `${name} followers are growing slower than competitors`, why: `You grew ${pctTxt(you.growth)} over the last ${you.growthDays} days; competitors grew ${pctTxt(median(compGrowth))} (median).`, evidence: `Daily follower tracking` });
+      plan.push({ platform: pl, impact: 'high', title: `${name} followers are growing slower than competitors`, why: `You grew ${pctTxt(you.growth)} over ${you.growthDays} days; competitors grew ${pctTxt(median(compGrowth))} (median).`, evidence: `Daily follower tracking` });
     const compEr = comps.map(c => c.erPerPost).filter((x): x is number => x !== null);
     // engagement per follower only compares fairly between accounts of similar size: a 200-follower
     // account whose posts reach non-followers shows a huge rate that means little
     const compF = median(comps.map(c => n0(c.followers)));
     const comparable = !!you.followers && compF > 0 && compF / you.followers <= 10 && you.followers / compF <= 10;
     if (comparable && you.erPerPost !== null && compEr.length && you.erPerPost > median(compEr) * 1.2 && you.postsPerWeek < compCadence)
-      plan.push({ platform: pl, impact: 'medium', title: `Your ${name} posts land well: publish more of them`, why: `Each post gets ${(you.erPerPost * 100).toFixed(2)}% of followers engaging, against ${(median(compEr) * 100).toFixed(2)}% for competitors. More posts at that quality is the fastest route to growth.`, evidence: `Engagement per follower, last 4 months` });
+      plan.push({ platform: pl, impact: 'medium', title: `Your ${name} posts land well: publish more of them`, why: `Each post gets ${(you.erPerPost * 100).toFixed(2)}% of followers engaging, against ${(median(compEr) * 100).toFixed(2)}% for competitors. More posts at that quality is the fastest route to growth.`, evidence: `Engagement per follower, ${lookback} days to ${fmtDay(range.to)}` });
     const rising = (trends[pl] ?? []).filter(t => t.status === 'rising' && t.dimension !== 'time');
     for (const t of rising.slice(0, 2)) {
       if (t.yourShare >= t.shareRecent * 0.8) continue;
-      plan.push({ platform: pl, impact: 'high', title: `${t.label} are rising on ${name}: use them more`, why: `Across you and your competitors, ${t.label.toLowerCase()} went from ${pctTxt(t.shareBefore)} to ${pctTxt(t.shareRecent)} of posts in the last 4 weeks, at ${times(t.liftRecent ?? 1)} the usual engagement. They are ${pctTxt(t.yourShare)} of your posts.`, evidence: `${t.postsRecent} posts in the last 4 weeks` });
+      plan.push({ platform: pl, impact: 'high', title: `${t.label} are rising on ${name}: use them more`, why: `Across you and your competitors, ${t.label.toLowerCase()} went from ${pctTxt(t.shareBefore)} to ${pctTxt(t.shareRecent)} of posts (${label} against the period before), at ${times(t.liftRecent ?? 1)} the usual engagement. They are ${pctTxt(t.yourShare)} of your posts.`, evidence: `${t.postsRecent} posts, ${label}` });
     }
     const bestTime = (trends[pl] ?? []).filter(t => t.dimension === 'time' && t.liftRecent !== null && t.postsRecent >= 3).sort((a, b) => b.liftRecent! - a.liftRecent!)[0];
     if (bestTime && bestTime.liftRecent! >= 1.15)
-      plan.push({ platform: pl, impact: 'medium', title: `On ${name}, post in the ${bestTime.label.toLowerCase().replace(/ \(.*\)/, '')}`, why: `Posts in the ${bestTime.label.toLowerCase()} get ${times(bestTime.liftRecent!)} the usual engagement across your industry set. ${pctTxt(bestTime.yourShare)} of your posts go out then.`, evidence: `IST, last 4 weeks` });
+      plan.push({ platform: pl, impact: 'medium', title: `On ${name}, post in the ${bestTime.label.toLowerCase().replace(/ \(.*\)/, '')}`, why: `Posts in the ${bestTime.label.toLowerCase()} get ${times(bestTime.liftRecent!)} the usual engagement across your industry set. ${pctTxt(bestTime.yourShare)} of your posts go out then.`, evidence: `IST, ${label}` });
     const tags = (hashtags[pl] ?? []).filter(t => t.accounts >= 2 && (t.lift ?? 0) >= 1.2).slice(0, 3);
-    if (tags.length) plan.push({ platform: pl, impact: 'medium', title: `Hashtags that work on ${name} right now`, why: `${tags.map(t => t.tag).join(', ')}: used by ${Math.max(...tags.map(t => t.accounts))} accounts in your set, with above-usual engagement.`, evidence: `Last 30 days` });
+    if (tags.length) plan.push({ platform: pl, impact: 'medium', title: `Hashtags that work on ${name}`, why: `${tags.map(t => t.tag).join(', ')}: used by ${Math.max(...tags.map(t => t.accounts))} accounts in your set, with above-usual engagement.`, evidence: label });
   }
   plan.sort((a, b) => (a.impact === 'high' ? 0 : 1) - (b.impact === 'high' ? 0 : 1));
   // a short plan gets done: the six strongest moves, at most three per platform

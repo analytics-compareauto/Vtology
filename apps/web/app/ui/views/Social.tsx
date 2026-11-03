@@ -1,10 +1,11 @@
 'use client';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { liftPhrase, type Dimension, type Insight, type PlatformSummary, type ScoredPost, type Segment, type SocialView } from '@vtology/core';
 import type { WorkspaceData } from '../Dashboard';
 import { api, ApiError } from '../api';
 import { ago, change, compact, inr, num, pct } from '../format';
 import { EffortMap, LineChart, Sparkline } from '../charts';
+import { DateRangePicker, daysIn, previousText, rangeQuery, rangeText, type Range } from '../DateRange';
 import { IconDown, IconImage, IconPlay, IconRefresh, IconSpark, IconText, IconUp } from '../icons';
 
 interface Connection { id: string; provider: string; label: string; status: string; scopes: string[]; connected_at: string; last_sync_at: string | null; last_error: string | null }
@@ -16,7 +17,9 @@ interface Overview {
   providers: { meta: boolean; youtube: boolean; linkedin: boolean; secret: boolean };
   connections: Connection[]; accounts: Account[]; campaigns: Campaign[];
   analysis: {
-    windowDays: number; posts: number; lowAudience?: number;
+    windowDays: number; from?: string; to?: string; posts: number; lowAudience?: number;
+    daily?: { day: string; platform: string; posts: number; interactions: number; views: number; reach: number; watchHours?: number }[];
+    previous?: PlatformSummary[];
     weekly?: { week: string; platform: string; posts: number; interactions: number; views: number; reach: number; watchHours?: number }[];
     byPlatform: PlatformSummary[];
     segments: Segment[]; insights: Insight[]; top: Post[]; bottom: Post[];
@@ -60,7 +63,7 @@ function mondayOf(d: Date) {
 const weekLabel = (iso: string) => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 
-export function Social({ data, workspaceId, notify }: { data: WorkspaceData; workspaceId: string; notify: (m: string) => void }) {
+export function Social({ data, workspaceId, notify, range, onRange }: { data: WorkspaceData; workspaceId: string; notify: (m: string) => void; range: Range; onRange: (r: Range) => void }) {
   const [o, setO] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -68,12 +71,18 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
   const [metric, setMetric] = useState<Metric>('interactions');
   const [manage, setManage] = useState(false);
   const [only, setOnly] = useState<string>('all');
+  const [loading, setLoading] = useState(false);
   const T = `/tenants/${workspaceId}`;
 
-  const load = useCallback(() => api<Overview>('GET', `${T}/social`).then(r => { setO(r); setError(null); return r; }).catch(e => { setError(e instanceof ApiError ? e.message : 'Could not load social data.'); return null; }), [T]);
+  const q = rangeQuery(range);
+  const load = useCallback(() => { setLoading(true); return api<Overview>('GET', `${T}/social?${q}`).then(r => { setO(r); setError(null); return r; }).catch(e => { setError(e instanceof ApiError ? e.message : 'Could not load social data.'); return null; }).finally(() => setLoading(false)); }, [T, q]);
 
+  // a new date range only reloads; the stale-account check runs once per page visit
+  const checked = useRef(false);
   useEffect(() => {
     load().then(r => {
+      if (checked.current) return;
+      checked.current = true;
       // keep connected accounts fresh: sync in the background if the last sync is over 12 hours old
       const stale = r?.connections.some(c => c.provider !== 'sample' && c.status === 'active' && (!c.last_sync_at || Date.now() - new Date(c.last_sync_at).getTime() > 12 * 3600_000));
       if (stale && r?.canConnect) {
@@ -110,25 +119,32 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
   const derived = useMemo(() => {
     if (!o) return null;
     const a = o.analysis;
-    const weekly = a.weekly ?? [];
     const present = ORDER.filter(p => a.byPlatform.some(b => b.platform === p && b.posts > 0));
     const platforms = only === 'all' ? present : present.filter(p => p === only);
-    // the last 26 complete-or-current weeks, gaps filled with zero
-    const end = mondayOf(new Date());
-    const weeks = Array.from({ length: 26 }, (_, i) => new Date(end.getTime() - (25 - i) * 7 * 86_400_000).toISOString().slice(0, 10));
-    const val = (p: string, w: string, m: Metric) => { const r = weekly.find(x => x.platform === p && x.week === w); return r ? r[m] ?? 0 : 0; };
-    const series = (m: Metric) => platforms.map(p => ({ key: p, label: PLATFORM[p]!, color: COLOR[p]!, values: weeks.map(w => val(p, w, m)) }));
-    const last4 = (vals: number[]) => sum(vals.slice(-4)), prev4 = (vals: number[]) => sum(vals.slice(-8, -4));
+    // the chart follows the dates: day by day up to 45 days, week by week beyond
+    const from = a.from ?? range.from, to = a.to ?? range.to;
+    const byDay = daysIn({ from, to }) <= 45 && !!a.daily;
+    const keys: string[] = [];
+    if (byDay) for (let t = Date.parse(from); t <= Date.parse(to); t += 86_400_000) keys.push(new Date(t).toISOString().slice(0, 10));
+    else for (let t = mondayOf(new Date(Date.parse(from))).getTime(); t <= Date.parse(to); t += 7 * 86_400_000) keys.push(new Date(t).toISOString().slice(0, 10));
+    const rows = (byDay ? a.daily! : a.weekly ?? []) as { day?: string; week?: string; platform: string; [k: string]: unknown }[];
+    const val = (p: string, k: string, m: Metric) => { const r = rows.find(x => x.platform === p && (x.day ?? x.week) === k); return r ? Number(r[m] ?? 0) : 0; };
+    const series = (m: Metric) => platforms.map(p => ({ key: p, label: PLATFORM[p]!, color: COLOR[p]!, values: keys.map(k => val(p, k, m)) }));
+    // the selected dates against the same number of days just before
+    const tot = (list: PlatformSummary[] | undefined, p: string, m: Metric) => { const b = list?.find(x => x.platform === p); return b ? Number((m === 'posts' ? b.posts : b[m]) ?? 0) : 0; };
+    const cur = (p: string, m: Metric) => tot(a.byPlatform, p, m), prev = (p: string, m: Metric) => tot(a.previous, p, m);
     const view: SocialView = only !== 'all' && a.perPlatform?.[only] ? a.perPlatform[only]! : { platform: null, rated: 0, segments: a.segments, insights: a.insights, top: a.top, bottom: a.bottom };
-    return { a, present, platforms, weeks, series, last4, prev4, view };
-  }, [o, only]);
+    return { a, present, platforms, weeks: keys, byDay, series, cur, prev, view };
+  }, [o, only, range.from, range.to]);
 
   const segs = useMemo(() => (derived?.view.segments ?? []).filter(s => s.dimension === dim && !(s.dimension === 'theme' && s.key === 'other')).sort((x, y) => y.lift - x.lift), [derived, dim]);
 
   if (error) return <div className="error-box" role="alert">{error}</div>;
   if (!o || !derived) return <div className="progress" />;
 
-  const { a, present, platforms, weeks, series, last4, prev4, view } = derived;
+  const { a, present, platforms, weeks, byDay, series, cur, prev, view } = derived;
+  const total = (m: Metric, f: (p: string, m: Metric) => number) => sum(platforms.map(p => f(p, m)));
+  const prevLabel = previousText(range);
   const plName = only === 'all' ? null : PLATFORM[only]!;
   const scopeSummaries = a.byPlatform.filter(b => platforms.includes(b.platform));
   const sumOrNull = (k: 'views' | 'reach' | 'watchHours') => { const xs = scopeSummaries.map(b => b[k]).filter((x): x is number => x !== null); return xs.length ? sum(xs) : null; };
@@ -142,11 +158,11 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
   const paid = o.campaigns.filter(c => /meta|google|youtube|search|programmatic/i.test(c.channel) || c.code.startsWith('meta:'));
   const m0: Metric = metricsHere.some(x => x.id === metric) ? metric : 'interactions';
   const trend = series(m0);
-  const totalNow = sum(trend.map(s => last4(s.values))), totalBefore = sum(trend.map(s => prev4(s.values)));
-  const mover = [...trend].sort((x, y) => (last4(y.values) - prev4(y.values)) - (last4(x.values) - prev4(x.values)))[0];
+  const totalNow = total(m0, cur), totalBefore = total(m0, prev);
+  const mover = [...platforms].sort((x, y) => (cur(y, m0) - prev(y, m0)) - (cur(x, m0) - prev(x, m0)))[0];
   const metricNoun = METRICS.find(m => m.id === m0)!.noun;
   const followers = sum(o.accounts.filter(x => platforms.includes(x.platform)).map(x => x.followers ?? 0));
-  const iNow = sum(series('interactions').map(s => last4(s.values))), iBefore = sum(series('interactions').map(s => prev4(s.values)));
+  const iNow = total('interactions', cur), iBefore = total('interactions', prev);
 
   const best = segs.find(s => s.lift >= 1.15);
   const cut = segs.filter(s => s.lift <= 0.85).sort((x, y) => y.share - x.share)[0];
@@ -215,18 +231,18 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
               <button aria-pressed={only === 'all'} onClick={() => setOnly('all')}>All platforms</button>
               {present.map(p => <button key={p} aria-pressed={only === p} onClick={() => setOnly(p)}>{PLATFORM[p]}</button>)}
             </div>
-            <span className="muted small">Last {Math.round(a.windowDays / 30)} months{plName ? `, ${plName} only` : ''}</span>
+            <DateRangePicker value={range} onChange={onRange} />
           </div>
 
-          {/* headline numbers */}
+          {loading && <div className="progress" />}
+          {/* headline numbers, each against the same number of days just before */}
           <section className="kpis" aria-label="Headline numbers" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
             <div className="kpi"><span className="label">Followers</span><span className="value">{compact(followers)}</span><span className="sub">{plName ?? `across ${o.accounts.length} accounts`}</span></div>
-            <div className="kpi"><span className="label">Posts</span><span className="value">{num(postsScope)}</span><span className="sub">{(postsScope / (a.windowDays / 7)).toFixed(1)} a week</span></div>
-            <div className="kpi"><span className="label">Views (impressions)</span><span className="value">{viewsAll === null ? '—' : compact(viewsAll)}</span><span className="sub">{viewsAll === null ? (plName ? NOT_REPORTED[only]?.views ?? 'not reported' : 'not reported') : `times your posts were played or shown${scopeSummaries.some(b => b.views === null) ? `, ${scopeSummaries.filter(b => b.views !== null).map(b => PLATFORM[b.platform]).join(' and ')} only` : ''}`}</span></div>
-            <div className="kpi"><span className="label">Reach</span><span className="value">{reachAll === null ? '—' : compact(reachAll)}</span><span className="sub">{reachAll === null ? (plName ? NOT_REPORTED[only]?.reach ?? 'not reported' : 'not reported') : `people who saw a post, added up per post${scopeSummaries.some(b => b.reach === null) ? `; ${scopeSummaries.filter(b => b.reach !== null).map(b => PLATFORM[b.platform]).join(' and ')} only` : ''}`}</span></div>
-            <div className="kpi"><span className="label">Hours watched</span><span className="value">{watchAll === null ? '—' : watchAll >= 10 ? compact(Math.round(watchAll)) : watchAll.toFixed(1)}</span><span className="sub">{watchAll === null ? (plName ? NOT_REPORTED[only]?.watchHours ?? 'not reported' : 'reels and videos; YouTube needs Analytics') : `on reels and videos${scopeSummaries.some(b => b.watchHours === null) ? `, ${scopeSummaries.filter(b => b.watchHours !== null).map(b => PLATFORM[b.platform]).join(' and ')} only` : ''}`}</span></div>
-            <div className="kpi"><span className="label">Interactions, last 4 weeks</span><span className="value">{compact(iNow)}</span>
-              <span className="sub"><b style={{ color: iNow >= iBefore ? 'var(--ok)' : 'var(--leak)' }}>{change(iNow, iBefore)}</b> vs the 4 weeks before ({compact(iBefore)})</span></div>
+            <div className="kpi"><span className="label">Posts</span><span className="value">{num(postsScope)}</span><Vs now={postsScope} before={total('posts', prev)} extra={`${(postsScope / (a.windowDays / 7)).toFixed(1)} a week`} /></div>
+            <div className="kpi"><span className="label">Views (impressions)</span><span className="value">{viewsAll === null ? '—' : compact(viewsAll)}</span>{viewsAll === null ? <span className="sub">{plName ? NOT_REPORTED[only]?.views ?? 'not reported' : 'not reported'}</span> : <Vs now={viewsAll} before={total('views', prev)} extra={scopeSummaries.some(b => b.views === null) ? `${scopeSummaries.filter(b => b.views !== null).map(b => PLATFORM[b.platform]).join(' and ')} only` : undefined} />}</div>
+            <div className="kpi"><span className="label">Reach</span><span className="value">{reachAll === null ? '—' : compact(reachAll)}</span>{reachAll === null ? <span className="sub">{plName ? NOT_REPORTED[only]?.reach ?? 'not reported' : 'not reported'}</span> : <Vs now={reachAll} before={total('reach', prev)} extra={scopeSummaries.some(b => b.reach === null) ? `${scopeSummaries.filter(b => b.reach !== null).map(b => PLATFORM[b.platform]).join(' and ')} only` : undefined} />}</div>
+            <div className="kpi"><span className="label">Hours watched</span><span className="value">{watchAll === null ? '—' : fmtVal('watchHours', watchAll)}</span>{watchAll === null ? <span className="sub">{plName ? NOT_REPORTED[only]?.watchHours ?? 'not reported' : 'reels and videos'}</span> : <Vs fmt={v => fmtVal('watchHours', v)} now={watchAll} before={total('watchHours', prev)} extra={scopeSummaries.some(b => b.watchHours === null) ? `${scopeSummaries.filter(b => b.watchHours !== null).map(b => PLATFORM[b.platform]).join(' and ')} only` : undefined} />}</div>
+            <div className="kpi"><span className="label">Interactions</span><span className="value">{compact(iNow)}</span><Vs now={iNow} before={iBefore} /></div>
           </section>
 
           {/* per platform */}
@@ -236,7 +252,7 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
                 const b = a.byPlatform.find(x => x.platform === p)!;
                 const acc = o.accounts.find(x => x.platform === p);
                 const vals = series('interactions').find(s => s.key === p)!.values;
-                const n = last4(vals), before = prev4(vals);
+                const n = cur(p, 'interactions'), before = prev(p, 'interactions');
                 return (
                   <button className="pf-tile" key={p} style={{ ['--pf' as string]: COLOR[p], textAlign: 'left', cursor: 'pointer', font: 'inherit', color: 'inherit' }} onClick={() => setOnly(p)} title={`Show ${PLATFORM[p]} only`}>
                     <div className="head">
@@ -246,8 +262,8 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
                     <div className="big">{acc?.followers != null ? compact(acc.followers) : '—'}<small>followers</small></div>
                     <div>
                       <div className="small" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                        <span className="muted">Weekly interactions</span>
-                        <b style={{ color: n >= before ? 'var(--ok)' : 'var(--leak)' }}>{change(n, before)}</b>
+                        <span className="muted">{byDay ? 'Daily' : 'Weekly'} interactions</span>
+                        <b style={{ color: n >= before ? 'var(--ok)' : 'var(--leak)' }} title={`vs ${prevLabel}`}>{change(n, before)}</b>
                       </div>
                       <Sparkline values={vals} color={COLOR[p]!} />
                     </div>
@@ -267,8 +283,8 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
           <section className="panel">
             <div className="panel-head">
               <div>
-                <h2>{totalBefore === 0 && totalNow === 0 ? `Weekly ${metricNoun}` : `${plName ? `${plName} ${metricNoun}` : metricNoun[0]!.toUpperCase() + metricNoun.slice(1)} ${totalNow >= totalBefore ? 'up' : 'down'} ${change(totalNow, totalBefore).replace(/^[+−]/, '')} in the last 4 weeks`}</h2>
-                <p>{compact(totalNow)} {metricNoun} in the last 4 weeks against {compact(totalBefore)} in the 4 before.{!plName && mover && last4(mover.values) !== prev4(mover.values) ? ` ${mover.label} moved most: ${compact(prev4(mover.values))} to ${compact(last4(mover.values))}.` : ''}</p>
+                <h2>{totalBefore === 0 ? `${byDay ? 'Daily' : 'Weekly'} ${metricNoun}${plName ? ` on ${plName}` : ''}` : `${plName ? `${plName} ${metricNoun}` : metricNoun[0]!.toUpperCase() + metricNoun.slice(1)} ${totalNow >= totalBefore ? 'up' : 'down'} ${change(totalNow, totalBefore).replace(/^[+−]/, '')} on the previous ${daysIn(range)} days`}</h2>
+                <p>{fmtVal(m0, totalNow)} {metricNoun} from {rangeText(range)}, against {fmtVal(m0, totalBefore)} from {prevLabel}.{!plName && mover && cur(mover, m0) !== prev(mover, m0) ? ` ${PLATFORM[mover]} moved most: ${fmtVal(m0, prev(mover, m0))} to ${fmtVal(m0, cur(mover, m0))}.` : ''} {byDay ? 'One point per day.' : 'One point per week (weeks start Monday).'}</p>
               </div>
               <div className="seg" role="group" aria-label="Measure">
                 {metricsHere.map(m => <button key={m.id} aria-pressed={m0 === m.id} onClick={() => setMetric(m.id)}>{m.label}</button>)}
@@ -387,6 +403,19 @@ export function Social({ data, workspaceId, notify }: { data: WorkspaceData; wor
         </section>
       )}
     </>
+  );
+}
+
+const fmtVal = (m: Metric, v: number) => (m === 'watchHours' ? (v >= 1000 ? `${compact(v)} h` : v >= 10 ? `${Math.round(v)} h` : `${v.toFixed(1)} h`) : compact(v));
+
+/** "▲ 12% vs 1,200" against the same number of days before the selected dates. */
+function Vs({ now, before, extra, fmt = compact }: { now: number; before: number; extra?: string; fmt?: (v: number) => string }) {
+  const up = now >= before;
+  return (
+    <span className="sub">
+      {before > 0 ? <><b style={{ color: up ? 'var(--ok)' : 'var(--leak)' }}>{up ? '▲' : '▼'} {change(now, before).replace(/^[+−]/, '')}</b> vs {fmt(before)} before</> : before === 0 && now > 0 ? <span>nothing in the period before</span> : <span>no change</span>}
+      {extra ? <span className="muted">{before >= 0 ? '. ' : ''}{extra}</span> : null}
+    </span>
   );
 }
 
