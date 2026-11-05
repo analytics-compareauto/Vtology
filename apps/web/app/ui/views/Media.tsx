@@ -1,7 +1,8 @@
 'use client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CHANNEL_LABEL, detectMediaColumns, isReachReport, sampleMediaCsv, streamCsv, toMediaRows, toReachRows, type Channel, type MediaColumns, type MediaField, type MediaRow, type ReachRow } from '@vtology/core';
+import { CHANNEL_LABEL, detectMediaColumns, isReachReport, squeezeMediaRows, sampleMediaCsv, streamCsv, toMediaRows, toReachRows, type Channel, type MediaColumns, type MediaField, type MediaRow, type ReachRow } from '@vtology/core';
 import { readXlsx } from '../xlsx';
+import { gunzipSync, unzipSync } from 'fflate';
 import { api, ApiError } from '../api';
 import { BarChart, LineChart } from '../charts';
 import { DateRangePicker, previousText, rangeQuery, rangeText, todayIST, type Range } from '../DateRange';
@@ -264,14 +265,25 @@ function ImportReport({ T, onDone }: { T: string; onDone: (msg: string | null, c
   const [name, setName] = useState('');
   const [currency, setCurrency] = useState('');
   const [reading, setReading] = useState<number | null>(null);
-  const [parsed, setParsed] = useState<{ kind: 'delivery' | 'reach'; rows: MediaRow[]; reach: ReachRow[]; skipped: number; cols: MediaColumns; header: string[] } | null>(null);
+  const [parsed, setParsed] = useState<{ kind: 'delivery' | 'reach'; rows: MediaRow[]; reach: ReachRow[]; skipped: number; cols: MediaColumns; header: string[]; squeezed?: { before: number; tailSites: number } } | null>(null);
   const [pick, setPick] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  async function choose(f: File | undefined) {
+  async function choose(f0: File | undefined) {
     setErr(null); setParsed(null);
-    if (!f) return;
+    if (!f0) return;
+    // zipped or gzipped exports are opened here, in the browser
+    let f: File = f0;
+    try {
+      if (/\.gz$/i.test(f0.name)) f = new File([gunzipSync(new Uint8Array(await f0.arrayBuffer())) as BlobPart], f0.name.replace(/\.gz$/i, ''));
+      else if (/\.zip$/i.test(f0.name)) {
+        const files = unzipSync(new Uint8Array(await f0.arrayBuffer()), { filter: x => /\.(csv|xlsx)$/i.test(x.name) && !x.name.startsWith('__MACOSX') });
+        const [name0, data] = Object.entries(files)[0] ?? [];
+        if (!name0 || !data) { setErr('The zip has no CSV or Excel file inside.'); return; }
+        f = new File([data as BlobPart], name0.split('/').pop()!);
+      }
+    } catch { setErr('Could not open the compressed file.'); return; }
     if (!name) setName(f.name.replace(/\.(csv|txt|xlsx)$/i, '').slice(0, 100));
     setReading(0);
     try {
@@ -287,7 +299,9 @@ function ImportReport({ T, onDone }: { T: string; onDone: (msg: string | null, c
       if (/\.xlsx$/i.test(f.name)) (await readXlsx(f)).forEach(take);
       else await streamCsv(f, take);
       if (!cols) { setErr('The file has no rows under its header.'); setReading(null); return; }
-      const result = { kind: reachMode ? 'reach' as const : 'delivery' as const, rows, reach, skipped, cols, header };
+      // squeeze delivery rows before upload: same totals, far fewer rows
+      const sq = reachMode ? null : squeezeMediaRows(rows);
+      const result = { kind: reachMode ? 'reach' as const : 'delivery' as const, rows: sq ? sq.rows : rows, reach, skipped, cols, header, squeezed: sq ? { before: sq.before, tailSites: sq.tailSites } : undefined };
       setParsed(result);
       setPick(new Set(reachMode ? reach.map(r => r.campaign) : rows.map(r => r.campaign)));
       const cur = rows.find(r => r.currency)?.currency;
@@ -325,7 +339,11 @@ function ImportReport({ T, onDone }: { T: string; onDone: (msg: string | null, c
       id = r.id;
       const rows: object[] = parsed.kind === 'reach' ? parsed.reach.filter(x => pick.has(x.campaign)) : parsed.rows.filter(x => pick.has(x.campaign)).map(x => ({ ...x, currency: x.currency || currency }));
       const size = parsed.kind === 'reach' ? 5000 : 2500;
-      for (let i = 0; i < rows.length; i += size) { await api('POST', `${T}/media/reports/${id}/rows`, { rows: rows.slice(i, i + size) }); setProgress(Math.min(1, (i + size) / rows.length)); }
+      // four chunks at a time; each is retried once if the network drops
+      const starts = Array.from({ length: Math.ceil(rows.length / size) }, (_, k) => k * size);
+      let done = 0;
+      const send = async (i: number) => { try { await api('POST', `${T}/media/reports/${id}/rows`, { rows: rows.slice(i, i + size) }); } catch (e) { if (e instanceof ApiError && e.status < 500) throw e; await api('POST', `${T}/media/reports/${id}/rows`, { rows: rows.slice(i, i + size) }); } done++; setProgress(done / starts.length); };
+      for (let k = 0; k < starts.length; k += 4) await Promise.all(starts.slice(k, k + 4).map(send));
       const f = await api<{ rows: number; from: string; to: string; overlaps: string[] }>('POST', `${T}/media/reports/${id}/finish`);
       onDone(`${name}: ${num(f.rows)} rows from ${rangeText(f)}.${f.overlaps.length ? ` It covers the same days as ${f.overlaps.join(', ')}; delete one so delivery isn't counted twice.` : ''}`, { from: f.from, to: f.to });
     } catch (e) {
@@ -340,7 +358,7 @@ function ImportReport({ T, onDone }: { T: string; onDone: (msg: string | null, c
       <b>Import a report</b>
       <span className="small muted">A DV360 delivery report (Reporting, New report, Standard, by Date) or a reach report with Unique Reach, as CSV or Excel. Other DSPs work too if each row has a date, impressions and cost.</span>
       <div className="grid-2" style={{ gap: 12 }}>
-        <label className="field">File<input className="input" type="file" accept=".csv,text/csv,.xlsx" onChange={e => choose(e.target.files?.[0])} /></label>
+        <label className="field">File<input className="input" type="file" accept=".csv,text/csv,.xlsx,.zip,.gz" onChange={e => choose(e.target.files?.[0])} /></label>
         <label className="field">Name<input className="input" value={name} onChange={e => setName(e.target.value)} maxLength={100} placeholder="Lincoln CTV and audio, Q4" /></label>
         <label className="field">Currency<input className="input" value={currency} onChange={e => setCurrency(e.target.value.toUpperCase().slice(0, 3))} placeholder="CAD" /></label>
       </div>
@@ -348,6 +366,7 @@ function ImportReport({ T, onDone }: { T: string; onDone: (msg: string | null, c
       {parsed && (
         <>
           <span className="small"><b>{parsed.kind === 'reach' ? 'Reach report' : 'Delivery report'}: {num(parsed.kind === 'reach' ? parsed.reach.length : parsed.rows.length)} rows</b>{dates ? `, ${rangeText(dates)}` : ''}{parsed.skipped ? `; ${num(parsed.skipped)} lines without a date left out (report notes and totals)` : ''}.
+            {parsed.squeezed && parsed.squeezed.before > parsed.rows.length && <> Squeezed from {num(parsed.squeezed.before)} rows ({Math.round((1 - parsed.rows.length / parsed.squeezed.before) * 100)}% smaller){parsed.squeezed.tailSites ? `, with ${num(parsed.squeezed.tailSites)} tiny sites grouped as “Other sites (small)”` : ''}; every total is unchanged.</>}
             {parsed.kind === 'delivery' && <> Spend by channel in the chosen lines: {Object.entries(byChannel).map(([c, v]) => `${CHANNEL_LABEL[c as Channel]} ${money(currency)(v)}`).join(', ') || 'none'}.</>}</span>
           {lines.length > 1 && (
             <div style={{ display: 'grid', gap: 6 }}>

@@ -326,3 +326,28 @@ export function frequencyFindings(lines: FrequencyLine[], money: (v: number) => 
   if (mid.length) out.push({ tone: 'info', title: `${mid.length === 1 ? 'One more line shows' : `${mid.length} more lines show`} the ad 3 to 4 times a day per person`, detail: mid.map(l => `${l.campaign} (${l.dailyFrequency.toFixed(1)})`).join('; '), action: 'Watch these: past 3 a day, extra impressions mostly repeat to the same people.' });
   return out;
 }
+
+/**
+ * Squeeze a report before upload: rows with the same date, line, creative, supply, site, device and
+ * region are added together, and each channel's long tail of tiny sites (under 0.05% of its spend and
+ * impressions) becomes one "Other sites" row per day and line. Every total stays exactly the same.
+ */
+export function squeezeMediaRows(rows: MediaRow[], tailShare = 0.0005): { rows: MediaRow[]; before: number; tailSites: number } {
+  const chSpend = new Map<string, { cost: number; imps: number }>(), siteSpend = new Map<string, { cost: number; imps: number }>();
+  for (const r of rows) {
+    const c = chSpend.get(r.channel) ?? { cost: 0, imps: 0 }; c.cost += r.cost; c.imps += r.impressions; chSpend.set(r.channel, c);
+    const k = `${r.channel}\u0000${r.site}`; const s = siteSpend.get(k) ?? { cost: 0, imps: 0 }; s.cost += r.cost; s.imps += r.impressions; siteSpend.set(k, s);
+  }
+  const tiny = new Set<string>();
+  for (const [k, s] of siteSpend) { const c = chSpend.get(k.split('\u0000')[0]!)!; if (s.cost <= c.cost * tailShare && s.imps <= c.imps * tailShare) tiny.add(k); }
+  const out = new Map<string, MediaRow>();
+  const NUMS = ['impressions', 'clicks', 'cost', 'viewable', 'measurable', 'starts', 'q1', 'q2', 'q3', 'completes', 'audible', 'conversions'] as const;
+  for (const r0 of rows) {
+    const site = tiny.has(`${r0.channel}\u0000${r0.site}`) ? 'Other sites (small)' : r0.site;
+    const key = [r0.day, r0.campaign, r0.lineItem, r0.creative, r0.channel, r0.supply, r0.exchange, site, r0.device, r0.region].join('\u0000');
+    const x = out.get(key);
+    if (!x) { out.set(key, { ...r0, site }); continue; }
+    for (const n of NUMS) x[n] += r0[n];
+  }
+  return { rows: [...out.values()], before: rows.length, tailSites: new Set([...tiny].map(k => k.split('\u0000')[1])).size };
+}

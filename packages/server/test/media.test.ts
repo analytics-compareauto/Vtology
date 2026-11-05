@@ -107,3 +107,16 @@ describe('reach reports', () => {
     expect(m.frequencyFindings.some((f: any) => /YouTube/.test(f.title))).toBe(false);
   });
 });
+
+describe('squeezing reports', () => {
+  it('merges repeated rows and groups tiny sites without changing any total', async () => {
+    const { squeezeMediaRows } = await import('@vtology/core');
+    const { rows } = toMediaRows(parseCsv(sampleMediaCsv('2026-11-04')), detectMediaColumns(SAMPLE_MEDIA_HEADER));
+    const tiny = rows.slice(0, 50).map((r, i) => ({ ...r, site: `tiny-${i}.example`, impressions: 1, cost: 0.001, completes: 1, starts: 1 }));
+    const all = [...rows, ...rows.slice(0, 500), ...tiny];
+    const s = squeezeMediaRows(all);
+    expect(s.rows.length).toBeLessThan(all.length);
+    expect(s.tailSites).toBe(50);
+    for (const k of ['impressions', 'cost', 'completes', 'viewable'] as const) expect(s.rows.reduce((a, r) => a + r[k], 0)).toBeCloseTo(all.reduce((a, r) => a + r[k], 0), 6);
+  });
+});
