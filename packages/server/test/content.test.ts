@@ -101,3 +101,14 @@ describe('content tab', () => {
     expect((await call(token, 'POST', `${T}/content/topics/scan`, { ids: [t.id] })).body.scanned).toBe(1);
   });
 });
+
+describe('brand health', () => {
+  it('summarises every area for the overview', async () => {
+    const ws = (await call(token, 'POST', '/workspaces', { name: 'Vegaa H', industry: 'Automotive', sample: true })).body.workspace.id;
+    await call(token, 'GET', `/tenants/${ws}/content`); // fills sample social data
+    const h = (await call(token, 'GET', `/tenants/${ws}/summary`)).body;
+    expect(h.tiles.map((t: any) => t.area)).toEqual(expect.arrayContaining(['Pipeline', 'Social', 'Content', 'Media', 'Connections']));
+    expect(h.tiles.find((t: any) => t.area === 'Pipeline').status).not.toBe('none');
+    expect(typeof h.score).toBe('number');
+  });
+});

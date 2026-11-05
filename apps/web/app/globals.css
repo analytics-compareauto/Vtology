@@ -577,3 +577,13 @@ table.bench tr.you td:first-child { box-shadow: inset 3px 0 0 var(--flow); }
 .dropzone { border: 2px dashed var(--line); border-radius: var(--radius-m); padding: 22px; text-align: center; display: grid; gap: 6px; justify-items: center; background: var(--surface); cursor: pointer; }
 .dropzone.over { border-color: var(--flow); background: var(--flow-soft); }
 @media (max-width: 600px) { .insight { grid-template-columns: 1fr; } .sc-row, .fq-row { grid-template-columns: minmax(0, 1fr) 90px 34px; } }
+.health-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.health-tile { text-align: left; display: grid; gap: 4px; align-content: start; padding: 14px; border-radius: var(--radius-m); border: 1px solid var(--line); background: var(--surface); cursor: pointer; font: inherit; color: var(--ink); border-top-width: 4px; }
+.health-tile:hover { box-shadow: var(--shadow); }
+.health-tile.good { border-top-color: var(--ok); } .health-tile.watch { border-top-color: var(--warn); } .health-tile.fix { border-top-color: var(--leak); } .health-tile.none { border-top-color: var(--line); opacity: 0.85; }
+.health-tile .ht-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.health-tile .ht-fig { font-family: var(--display); font-size: 28px; font-weight: 700; letter-spacing: -0.02em; }
+.health-tile.fix .ht-fig { color: var(--leak); } .health-tile.good .ht-fig { color: var(--ok); }
+.health-score { display: grid; justify-items: end; } .health-score b { font-family: var(--display); font-size: 40px; line-height: 1; }
+.health-score[data-tone='good'] b { color: var(--ok); } .health-score[data-tone='watch'] b { color: var(--warn); } .health-score[data-tone='fix'] b { color: var(--leak); }
+.health-score span { font-size: 12.5px; color: var(--muted); }

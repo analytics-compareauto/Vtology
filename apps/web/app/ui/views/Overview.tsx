@@ -1,9 +1,11 @@
 'use client';
+import { useEffect, useState } from 'react';
 import { STAGES } from '@vtology/core';
+import { api } from '../api';
 import type { WorkspaceData } from '../Dashboard';
 import { RULES, inr, num, pct } from '../format';
 
-type Tab = 'overview' | 'journeys' | 'findings' | 'partners' | 'social' | 'growth' | 'approvals' | 'data';
+type Tab = 'overview' | 'journeys' | 'findings' | 'partners' | 'social' | 'growth' | 'content' | 'media' | 'audiences' | 'approvals' | 'data';
 
 export function Overview({ data, go }: { data: WorkspaceData; go: (t: Tab) => void }) {
   const { me, journeys, findings, partners } = data;
@@ -30,6 +32,7 @@ export function Overview({ data, go }: { data: WorkspaceData; go: (t: Tab) => vo
 
   return (
     <>
+      <Health tenantId={me.tenantId} go={go} />
       <section className="kpis" aria-label="Key figures">
         {journeys.length > 0 ? (
           <>
@@ -126,5 +129,32 @@ export function Overview({ data, go }: { data: WorkspaceData; go: (t: Tab) => vo
         </section>
       </div>
     </>
+  );
+}
+
+interface Tile { area: string; tab: Tab; status: 'good' | 'watch' | 'fix' | 'none'; figure: string; label: string; detail: string }
+const WORD = { good: 'Healthy', watch: 'Watch', fix: 'Needs action', none: 'Not set up' } as const;
+
+/** One tile per area: the brand's health report at a glance. */
+function Health({ tenantId, go }: { tenantId: string; go: (t: Tab) => void }) {
+  const [h, setH] = useState<{ score: number | null; tiles: Tile[] } | null>(null);
+  useEffect(() => { api<{ score: number | null; tiles: Tile[] }>('GET', `/tenants/${tenantId}/summary`).then(setH).catch(() => setH(null)); }, [tenantId]);
+  if (!h) return null;
+  const fix = h.tiles.filter(t => t.status === 'fix').length;
+  return (
+    <section className="panel health">
+      <div className="panel-head">
+        <div><h2>Brand health</h2><p>Every part of Vtology in one view: what is healthy, what to watch, and what needs action now. Click a tile to open that section.</p></div>
+        {h.score !== null && <div className="health-score" data-tone={h.score >= 70 ? 'good' : h.score >= 45 ? 'watch' : 'fix'}><b>{h.score}</b><span>of 100{fix ? ` · ${fix} to fix` : ''}</span></div>}
+      </div>
+      <div className="health-grid">{h.tiles.map(t => (
+        <button key={t.area} className={`health-tile ${t.status}`} onClick={() => go(t.tab)}>
+          <span className="ht-head"><b>{t.area}</b><span className={`tag ${t.status === 'good' ? 'ok' : t.status === 'watch' ? 'warn' : t.status === 'fix' ? 'leak' : 'plain'}`}>{WORD[t.status]}</span></span>
+          <span className="ht-fig">{t.figure}</span>
+          <span className="small">{t.label}</span>
+          <span className="small muted">{t.detail}</span>
+        </button>
+      ))}</div>
+    </section>
   );
 }

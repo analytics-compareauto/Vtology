@@ -15,6 +15,7 @@ import { startConnect, finishConnect, socialOverview, syncTenant, syncAll, syncC
 import { ROLES, type RoleCode } from '@vtology/core';
 import { listSources, createSource, updateSource, deleteSource, syncSource, syncTenantSources, dueSources } from './sources';
 import { contentOverview, addTopics, removeTopic, suggestTopics, scanTopics, videoRetention } from './content';
+import { healthSummary } from './health';
 import { listReports, createReport, appendMediaRows, finishReport, deleteReport, mediaOverview } from './media';
 import { listAudiences, createList, appendRows, finishList, deleteList, createBucket, updateBucket, previewBucket, deleteBucket, computeBucket, exportBucket, purgeAllExpired } from './audiences';
 
@@ -86,6 +87,7 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
     const route = `${req.method} ${parts.slice(2).join('/')}`;
 
     if (route === 'GET me') return json(200, await me(ctx));
+    if (route === 'GET summary') return json(200, await healthSummary(ctx));
     if (route === 'GET social') return json(200, await socialOverview(deps, ctx, rangeParam(url, ctx.now, 180)));
     if (route === 'POST social/sync') return json(200, await syncTenant(deps, ctx));
     if (route === 'GET social/growth') {
