@@ -50,7 +50,7 @@ export async function healthSummary(ctx: Ctx) {
   // media: last 30 days of the latest report, and the worst frequency
   const [m] = await q<{ cost: number; completes: number; starts: number; imps: number; last: string | null; currency: string | null }>(`select coalesce(sum(r.cost),0)::float as cost, coalesce(sum(r.completes),0)::float as completes, coalesce(sum(r.starts),0)::float as starts, coalesce(sum(r.impressions),0)::float as imps,
       max(r.day)::text as last, max(m.currency) as currency
-    from vt.media_rows r join vt.media_reports m on m.id = r.report_id where r.tenant_id = $1 and r.day > (select max(day) - 30 from vt.media_rows where tenant_id = $1)`);
+    from vt.media_daily r join vt.media_reports m on m.id = r.report_id where r.tenant_id = $1 and r.day > (select max(day) - 30 from vt.media_daily where tenant_id = $1)`);
   const freq = await q<{ campaign: string; f: number }>(`select campaign, avg(impressions / nullif(reach, 0))::float as f from vt.media_reach where tenant_id = $1 and reach > 0 and day > (select max(day) - 30 from vt.media_reach where tenant_id = $1) group by campaign order by f desc limit 1`);
   if (m!.imps) {
     const comp = m!.completes / Math.max(1, m!.starts || m!.imps);

@@ -865,6 +865,36 @@ alter table vt.media_reach enable row level security;
 create policy media_reach_read on vt.media_reach for select to authenticated using (vt.member_role(tenant_id) in ('data_steward', 'marketing_head', 'finance'));
 grant select on vt.media_reach to authenticated;
 
+-- ===== 20261105000015_media_speed.sql =====
+-- Speed: a small daily total per report and channel (for the Overview), and saved Media results
+-- (recalculated only when a report is added or removed).
+create table if not exists vt.media_daily (
+  tenant_id uuid not null references vt.tenants(id) on delete cascade,
+  report_id uuid not null references vt.media_reports(id) on delete cascade,
+  day date not null,
+  channel text not null,
+  impressions numeric not null default 0,
+  cost numeric not null default 0,
+  starts numeric not null default 0,
+  completes numeric not null default 0,
+  primary key (report_id, day, channel)
+);
+create index if not exists media_daily_tenant on vt.media_daily (tenant_id, day);
+insert into vt.media_daily (tenant_id, report_id, day, channel, impressions, cost, starts, completes)
+  select tenant_id, report_id, day, channel, sum(impressions), sum(cost), sum(starts), sum(completes) from vt.media_rows group by tenant_id, report_id, day, channel
+  on conflict do nothing;
+alter table vt.media_daily enable row level security;
+
+create table if not exists vt.media_cache (
+  tenant_id uuid not null references vt.tenants(id) on delete cascade,
+  key text not null,
+  version text not null,
+  result jsonb not null,
+  created_at timestamptz not null default now(),
+  primary key (tenant_id, key)
+);
+alter table vt.media_cache enable row level security;
+
 create schema if not exists vt_meta;
 create table if not exists vt_meta.schema_migrations (id text primary key, applied_at timestamptz not null default now());
-insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth'), ('20261103000009_data_sources'), ('20261105000010_audiences'), ('20261105000011_media'), ('20261105000012_content'), ('20261105000013_repair_json'), ('20261105000014_media_reach') on conflict do nothing;
+insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth'), ('20261103000009_data_sources'), ('20261105000010_audiences'), ('20261105000011_media'), ('20261105000012_content'), ('20261105000013_repair_json'), ('20261105000014_media_reach'), ('20261105000015_media_speed') on conflict do nothing;

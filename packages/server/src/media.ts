@@ -77,6 +77,9 @@ export async function finishReport(ctx: Ctx, id: string) {
   const [s] = await ctx.db.admin.query<{ n: number; f: string | null; t: string | null }>(`select count(*)::int as n, min(day)::text as f, max(day)::text as t from ${table} where report_id = $1 and tenant_id = $2`, [id, ctx.tenantId]);
   if (!s!.n) throw new HttpError(400, 'No rows arrived, so the report was not saved.');
   await ctx.db.admin.query(`update vt.media_reports set status = 'ready', rows = $3, date_from = $4, date_to = $5 where id = $1 and tenant_id = $2`, [id, ctx.tenantId, s!.n, s!.f, s!.t]);
+  if (k.kind !== 'reach') await ctx.db.admin.query(`insert into vt.media_daily (tenant_id, report_id, day, channel, impressions, cost, starts, completes)
+    select tenant_id, report_id, day, channel, sum(impressions), sum(cost), sum(starts), sum(completes) from vt.media_rows where report_id = $1 and tenant_id = $2 group by tenant_id, report_id, day, channel
+    on conflict (report_id, day, channel) do update set impressions = excluded.impressions, cost = excluded.cost, starts = excluded.starts, completes = excluded.completes`, [id, ctx.tenantId]);
   // another ready report covering the same days would count the same delivery twice
   const overlap = await ctx.db.admin.query<{ name: string }>(`select name from vt.media_reports where tenant_id = $1 and id <> $2 and status = 'ready' and kind = $5 and date_from <= $4 and date_to >= $3`, [ctx.tenantId, id, s!.f, s!.t, k.kind]);
   return { rows: s!.n, from: s!.f, to: s!.t, overlaps: overlap.map(o => o.name) };
@@ -106,6 +109,18 @@ export function moneyFormat(currency: string) {
 /** Everything the Media tab shows, for one date range, optionally one channel and one report. */
 export async function mediaOverview(ctx: Ctx, range: { from: string; to: string }, opts: { channel?: string | null; report?: string | null }) {
   requireRole(ctx, VIEWERS, 'Media reports');
+  // the answer only changes when reports change: keep it, keyed by the question and the reports' state
+  const [v] = await ctx.db.admin.query<{ version: string }>(`select coalesce(count(*)::text || ':' || max(created_at)::text || ':' || sum(rows)::text || ':' || string_agg(status, ''), 'none') as version from vt.media_reports where tenant_id = $1`, [ctx.tenantId]);
+  const key = JSON.stringify([range.from, range.to, opts.channel ?? null, opts.report ?? null]);
+  const [hit] = await ctx.db.admin.query<{ result: unknown }>(`select result from vt.media_cache where tenant_id = $1 and key = $2 and version = $3`, [ctx.tenantId, key, v!.version]);
+  if (hit) return typeof hit.result === 'string' ? JSON.parse(hit.result) : hit.result;
+  const result = await computeMediaOverview(ctx, range, opts);
+  await ctx.db.admin.query(`delete from vt.media_cache where tenant_id = $1 and (version <> $2 or created_at < now() - interval '7 days')`, [ctx.tenantId, v!.version]);
+  await ctx.db.admin.query(`insert into vt.media_cache (tenant_id, key, version, result) values ($1,$2,$3,$4) on conflict (tenant_id, key) do update set version = excluded.version, result = excluded.result, created_at = now()`, [ctx.tenantId, key, v!.version, JSON.stringify(result)]);
+  return result;
+}
+
+async function computeMediaOverview(ctx: Ctx, range: { from: string; to: string }, opts: { channel?: string | null; report?: string | null }) {
   const sql = ctx.db.admin;
   const reports = await sql.query<{ id: string; name: string; kind: string; currency: string; date_from: string; date_to: string; rows: number; created_at: string; status: string }>(
     `select id, name, kind, currency, date_from::text, date_to::text, rows, created_at, status from vt.media_reports where tenant_id = $1 order by created_at desc`, [ctx.tenantId]);
