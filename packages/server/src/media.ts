@@ -93,7 +93,7 @@ export async function deleteReport(ctx: Ctx, id: string) {
   return { removed: true };
 }
 
-const SUMS = NUMS.map(k => `coalesce(sum(r.${k}), 0)::float as ${k}`).join(', ');
+const SUMS = NUMS.map(k => `coalesce(sum(r.${k}::float8), 0) as ${k}`).join(', ');
 const pickSums = (r: Record<string, unknown>): Sums => Object.fromEntries(NUMS.map(k => [k, Number(r[k] ?? 0)])) as unknown as Sums;
 const addDays = (d: string, n: number) => new Date(Date.parse(d) + n * 86_400_000).toISOString().slice(0, 10);
 
@@ -111,7 +111,7 @@ export async function mediaOverview(ctx: Ctx, range: { from: string; to: string 
   requireRole(ctx, VIEWERS, 'Media reports');
   // the answer only changes when reports change: keep it, keyed by the question and the reports' state
   const [v] = await ctx.db.admin.query<{ version: string }>(`select coalesce(count(*)::text || ':' || max(created_at)::text || ':' || sum(rows)::text || ':' || string_agg(status, ''), 'none') as version from vt.media_reports where tenant_id = $1`, [ctx.tenantId]);
-  const key = JSON.stringify(['v2', range.from, range.to, opts.channel ?? null, opts.report ?? null]); // bump when the result's shape changes
+  const key = JSON.stringify(['v3', range.from, range.to, opts.channel ?? null, opts.report ?? null]); // bump when the result's shape changes
   const [hit] = await ctx.db.admin.query<{ result: unknown }>(`select result from vt.media_cache where tenant_id = $1 and key = $2 and version = $3`, [ctx.tenantId, key, v!.version]);
   if (hit) return typeof hit.result === 'string' ? JSON.parse(hit.result) : hit.result;
   const result = await computeMediaOverview(ctx, range, opts);
@@ -145,20 +145,20 @@ async function computeMediaOverview(ctx: Ctx, range: { from: string; to: string 
 
   const params = [ctx.tenantId, ready.map(r => r.id), range.from, range.to, channel];
   const where = `r.tenant_id = $1 and r.report_id = any($2::uuid[]) and r.day between $3::date and $4::date and ($5::text is null or r.channel = $5)`;
-  const q = <T,>(select: string, group: string) => sql.query<T & Record<string, unknown>>(`select ${select}${select ? ', ' : ''}${SUMS} from vt.media_rows r where ${where} ${group ? `group by ${group}` : ''}`, params);
-  const [total] = await q<object>('', '');
+  // one pass over the rows for every breakdown (grouping sets), instead of one scan per breakdown
+  const DIMS = ['r.channel', 'r.supply', 'r.site', 'r.creative', "date_trunc('week', r.day)", 'r.device', 'r.region', 'r.day', 'r.campaign', 'r.line_item'];
+  const SETS: Record<string, number[]> = { total: [], channel: [0], supply: [0, 1], site: [0, 2], creativeWeek: [0, 3, 4], device: [0, 5], region: [6], day: [7], line: [0, 8, 9], creative: [0, 3] };
+  const maskOf = (idx: number[]) => DIMS.reduce((m, _, i) => m | (idx.includes(i) ? 0 : 1 << (DIMS.length - 1 - i)), 0);
+  const rowsAll = await sql.query<Record<string, unknown> & { g: number }>(
+    `select grouping(${DIMS.join(', ')}) as g, r.channel, r.supply, bool_or(r.deal) as deal, r.site, r.creative, date_trunc('week', r.day)::date::text as week, r.device, r.region, r.day::text as day, r.campaign, r.line_item, ${SUMS}
+       from vt.media_rows r where ${where}
+      group by grouping sets (${Object.values(SETS).map(ix => `(${ix.map(i => DIMS[i]).join(', ')})`).join(', ')})`, params);
+  const part = <T,>(name: string) => rowsAll.filter(r => Number(r.g) === maskOf(SETS[name]!)) as unknown as (T & Record<string, unknown>)[];
+  const [total] = part<object>('total');
   const [previous] = await sql.query<Record<string, unknown>>(`select ${SUMS} from vt.media_rows r where r.tenant_id = $1 and r.report_id = any($2::uuid[]) and r.day between $3::date and $4::date and ($5::text is null or r.channel = $5)`, [ctx.tenantId, ready.map(r => r.id), prev.from, prev.to, channel]);
-  const [byChannel, bySupply, bySite, byCreativeWeek, byDevice, byRegion, daily, byLine, byCreative] = await Promise.all([
-    q<{ channel: Channel }>('r.channel', 'r.channel'),
-    q<{ channel: Channel; supply: string; deal: boolean }>('r.channel, r.supply, bool_or(r.deal) as deal', 'r.channel, r.supply'),
-    q<{ channel: Channel; site: string }>('r.channel, r.site', 'r.channel, r.site'),
-    q<{ channel: Channel; creative: string; week: string }>(`r.channel, r.creative, date_trunc('week', r.day)::date::text as week`, `r.channel, r.creative, date_trunc('week', r.day)`),
-    q<{ channel: Channel; device: string }>('r.channel, r.device', 'r.channel, r.device'),
-    q<{ region: string }>('r.region', 'r.region'),
-    q<{ day: string }>('r.day::text as day', 'r.day'),
-    q<{ channel: Channel; campaign: string; line_item: string }>('r.channel, r.campaign, r.line_item', 'r.channel, r.campaign, r.line_item'),
-    q<{ channel: Channel; creative: string }>('r.channel, r.creative', 'r.channel, r.creative'),
-  ]);
+  const byChannel = part<{ channel: Channel }>('channel'), bySupply = part<{ channel: Channel; supply: string; deal: boolean }>('supply'), bySite = part<{ channel: Channel; site: string }>('site');
+  const byCreativeWeek = part<{ channel: Channel; creative: string; week: string }>('creativeWeek'), byDevice = part<{ channel: Channel; device: string }>('device'), byRegion = part<{ region: string }>('region');
+  const daily = part<{ day: string }>('day'), byLine = part<{ channel: Channel; campaign: string; line_item: string }>('line'), byCreative = part<{ channel: Channel; creative: string }>('creative');
   const money = moneyFormat(currency);
   const g = (key: string, row: Record<string, unknown>, extra: Partial<Group> = {}): Group => ({ key, sums: pickSums(row), ...extra });
   const findings = mediaFindings({
