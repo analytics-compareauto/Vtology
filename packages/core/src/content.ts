@@ -88,6 +88,8 @@ export interface TopicResult {
   medianAgeDays: number;
   /** share of the top 10 from channels bigger than the brand's */
   biggerChannels: number | null;
+  /** share of the top 10 from channels near the brand's size (up to 5× its subscribers, or 50K): proof that a channel like it can rank */
+  nearSize: number | null;
   ownRank: number | null;
   competitorRanks: { name: string; rank: number }[];
   opportunity: number;
@@ -101,15 +103,17 @@ export function scoreTopic(videos: TopicVideo[], now: Date, own: { channelIds: s
   const medianAgeDays = Math.round(median(top.map(age)));
   const known = top.filter(v => v.channelSubscribers !== null && !own.channelIds.includes(v.channelId));
   const biggerChannels = own.subscribers && known.length ? known.filter(v => v.channelSubscribers! > own.subscribers!).length / known.length : null;
+  const near = own.subscribers !== null ? Math.max(own.subscribers * 5, 50_000) : null;
+  const nearSize = near !== null && known.length ? known.filter(v => v.channelSubscribers! <= near).length / known.length : null;
   const rankOf = (id: string) => { const i = videos.findIndex(v => v.channelId === id); return i >= 0 ? i + 1 : null; };
   const ownRanks = own.channelIds.map(rankOf).filter((r): r is number => r !== null);
   const competitorRanks = competitors.map(c => ({ name: c.name, rank: rankOf(c.channelId) })).filter((c): c is { name: string; rank: number } => c.rank !== null).sort((a, b) => a.rank - b.rank);
-  // 0-100: demand on a log scale, a bonus when the top results are old, a penalty when they come from much bigger channels
+  // 0-100: demand on a log scale, more when the top results are old, and more when channels near the brand's size already rank
   const d = Math.min(1, Math.log10(1 + demand) / 5); // 100,000 views a day = full marks
-  const stale = Math.min(1, medianAgeDays / 540);
-  const crowd = biggerChannels ?? 0.5;
-  const opportunity = Math.round(100 * d * (0.55 + 0.45 * stale) * (1 - 0.5 * crowd));
-  return { scannedAt: now.toISOString(), videos: videos.slice(0, 20), demand, medianAgeDays, biggerChannels, ownRank: ownRanks.length ? Math.min(...ownRanks) : null, competitorRanks, opportunity };
+  const stale = Math.min(1, medianAgeDays / 365);
+  const room = nearSize ?? (biggerChannels !== null ? 1 - biggerChannels : 0.3);
+  const opportunity = Math.round(100 * d * (0.5 + 0.25 * stale + 0.25 * Math.min(1, room * 2.5)));
+  return { scannedAt: now.toISOString(), videos: videos.slice(0, 20), demand, medianAgeDays, biggerChannels, nearSize, ownRank: ownRanks.length ? Math.min(...ownRanks) : null, competitorRanks, opportunity };
 }
 
 /** Starting topics per industry, for a brand to keep, edit or drop. */

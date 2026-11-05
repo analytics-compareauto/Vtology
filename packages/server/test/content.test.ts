@@ -40,6 +40,7 @@ describe('content analysis', () => {
   it('scores search topics on demand, stale results and bigger channels', () => {
     const v = (i: number, views: number, days: number, subs: number) => ({ id: `${i}`, title: 't', channelId: `c${i}`, channel: 'x', publishedAt: new Date(NOW.getTime() - days * 86_400_000).toISOString(), views, channelSubscribers: subs });
     const old = scoreTopic(Array.from({ length: 10 }, (_, i) => v(i, 2_000_000, 800, 30_000)), NOW, { channelIds: [], subscribers: 50_000 }, []);
+    expect(old.nearSize).toBe(1);
     const crowded = scoreTopic(Array.from({ length: 10 }, (_, i) => v(i, 2_000_000, 60, 5_000_000)), NOW, { channelIds: [], subscribers: 50_000 }, []);
     expect(old.opportunity).toBeGreaterThan(crowded.opportunity);
     expect(crowded.biggerChannels).toBe(1);

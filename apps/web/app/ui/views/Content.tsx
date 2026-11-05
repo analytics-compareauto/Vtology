@@ -10,7 +10,7 @@ interface Acc { id: string; platform: string; name: string; handle: string | nul
 interface Out { id: string; accountId: string; platform: string; format: string; title: string; postedAt: string; permalink: string | null; thumbnailUrl: string | null; score: number; value: number; metric: string; usual: number; ageDays: number; themes: string[] }
 interface Pattern { kind: string; key: string; label: string; outliers: number; posts: number; outlierShare: number; postShare: number; ratio: number; byCompetitors: number }
 interface TopicVideo { id: string; title: string; channel: string; channelId: string; publishedAt: string; views: number }
-interface Topic { id: string; phrase: string; last_scan_at: string | null; last_error: string | null; result: { demand: number; medianAgeDays: number; biggerChannels: number | null; ownRank: number | null; competitorRanks: { name: string; rank: number }[]; opportunity: number; videos: TopicVideo[] } | null }
+interface Topic { id: string; phrase: string; last_scan_at: string | null; last_error: string | null; result: { demand: number; medianAgeDays: number; biggerChannels: number | null; nearSize?: number | null; ownRank: number | null; competitorRanks: { name: string; rank: number }[]; opportunity: number; videos: TopicVideo[] } | null }
 interface Check { id: string; label: string; pass: boolean; fix: string }
 interface Video { id: string; title: string; postedAt: string; permalink: string | null; thumbnailUrl: string | null; format: string; views: number | null; avgViewPct: number | null; durationS: number | null; checks: Check[]; score: number | null }
 interface Data { canEdit: boolean; isDemo: boolean; youtubeConnected: boolean; accounts: Acc[]; outliers: Out[]; patterns: Pattern[]; topics: Topic[]; suggestedTopics: string[]; brandDomain: string | null; usualViewPct: number | null; videos: Video[] }
@@ -133,7 +133,7 @@ function Topics({ T, d, busy, onScan, onAdd, onRemove }: { T: string; d: Data; b
   return (
     <section className="panel">
       <div className="panel-head">
-        <div><h2>Topics people search on YouTube</h2><p>For each phrase: how much the top 10 videos get watched a day, how old they are, how many come from channels bigger than yours, and where you and competitors rank. Old results and smaller channels leave room for a new video. Searched weekly.</p></div>
+        <div><h2>Topics people search on YouTube</h2><p>For each phrase: how much the top 10 videos get watched a day, how old they are, how many come from channels near your size, and where you and competitors rank. Old results, and channels like yours already ranking, leave room for a new video. Searched weekly.</p></div>
         {d.canEdit && d.topics.length > 0 && <button className="btn" onClick={() => onScan(d.topics.map(t => t.id).slice(0, 10))} disabled={busy || !d.youtubeConnected}><IconRefresh />{busy ? 'Searching…' : 'Search again'}</button>}
       </div>
       {!d.youtubeConnected && <div className="note-box" style={{ marginBottom: 12 }}>Connect your YouTube channel on the Social tab: topics are searched through it.</div>}
@@ -150,7 +150,7 @@ function Topics({ T, d, busy, onScan, onAdd, onRemove }: { T: string; d: Data; b
       {sorted.length > 0 && (
         <div className="table-wrap" style={{ boxShadow: 'none' }}>
           <table>
-            <thead><tr><th>Topic</th><th style={{ width: 160 }}>Opportunity</th><th className="num">Daily views, top 10</th><th className="num">Typical age</th><th className="num">From bigger channels</th><th>You</th><th>Competitors</th><th /></tr></thead>
+            <thead><tr><th>Topic</th><th style={{ width: 160 }}>Opportunity</th><th className="num">Daily views, top 10</th><th className="num">Typical age</th><th className="num">Channels near your size</th><th>You</th><th>Competitors</th><th /></tr></thead>
             <tbody>{sorted.map(t => {
               const r = t.result;
               return [
@@ -159,7 +159,7 @@ function Topics({ T, d, busy, onScan, onAdd, onRemove }: { T: string; d: Data; b
                   <td>{r && <div className="aud-index"><i style={{ width: `${r.opportunity}%`, background: r.opportunity >= 60 ? 'var(--ok)' : r.opportunity >= 35 ? 'var(--flow)' : 'var(--muted)' }} /><span>{r.opportunity}</span></div>}</td>
                   <td className="num">{r ? compact(r.demand) : '–'}</td>
                   <td className="num">{r ? (r.medianAgeDays >= 60 ? `${Math.round(r.medianAgeDays / 30)} months` : `${r.medianAgeDays} days`) : '–'}</td>
-                  <td className="num">{r?.biggerChannels != null ? pct(r.biggerChannels) : '–'}</td>
+                  <td className="num">{r?.nearSize != null ? `${Math.round(r.nearSize * 10)} of 10` : r?.biggerChannels != null ? `${10 - Math.round(r.biggerChannels * 10)} of 10` : '–'}</td>
                   <td>{r ? (r.ownRank ? <span className="tag ok">#{r.ownRank}</span> : <span className="tag plain">not in top 20</span>) : ''}</td>
                   <td className="small">{r?.competitorRanks.length ? r.competitorRanks.map(c => `${c.name} #${c.rank}`).join(', ') : r ? 'none in top 20' : ''}</td>
                   <td>{d.canEdit && <button className="btn small link" onClick={() => onRemove(t.id)}>Remove</button>}</td>
