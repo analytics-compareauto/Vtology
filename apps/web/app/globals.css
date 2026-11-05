@@ -587,3 +587,7 @@ table.bench tr.you td:first-child { box-shadow: inset 3px 0 0 var(--flow); }
 .health-score { display: grid; justify-items: end; } .health-score b { font-family: var(--display); font-size: 40px; line-height: 1; }
 .health-score[data-tone='good'] b { color: var(--ok); } .health-score[data-tone='watch'] b { color: var(--warn); } .health-score[data-tone='fix'] b { color: var(--leak); }
 .health-score span { font-size: 12.5px; color: var(--muted); }
+.fatigue-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.fatigue { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--surface); border-left-width: 4px; }
+.fatigue.wearing-out { border-left-color: var(--leak); } .fatigue.slipping { border-left-color: var(--warn); } .fatigue.steady { border-left-color: var(--ok); }
+.fatigue .ht-head { display: flex; justify-content: space-between; gap: 8px; align-items: center; min-width: 0; }

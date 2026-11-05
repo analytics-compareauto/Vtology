@@ -4,7 +4,7 @@ import { CHANNEL_LABEL, detectMediaColumns, isReachReport, squeezeMediaRows, sam
 import { readXlsx } from '../xlsx';
 import { gunzipSync, unzipSync } from 'fflate';
 import { api, ApiError } from '../api';
-import { BarChart, LineChart } from '../charts';
+import { BarChart, LineChart, Sparkline } from '../charts';
 import { DateRangePicker, previousText, rangeQuery, rangeText, todayIST, type Range } from '../DateRange';
 import { compact, num, pct } from '../format';
 
@@ -19,7 +19,8 @@ interface Data {
   trend?: { x: string; cost: number; completes: number; impressions: number }[];
   supply?: (M & { channel: Channel; supply: string; deal: boolean })[]; sites?: (M & { channel: Channel; site: string })[];
   lineItems?: (M & { channel: Channel; campaign: string; line_item: string })[]; creatives?: (M & { channel: Channel; creative: string })[];
-  devices?: (M & { channel: Channel; device: string })[]; regions?: (M & { region: string })[]; findings?: Finding[];
+  devices?: (M & { channel: Channel; device: string })[];
+  creativeTrend?: { creative: string; channel: Channel; measure: string; weeks: number; cost: number; series: { week: string; value: number }[]; early: number; late: number; change: number | null; status: string }[]; regions?: (M & { region: string })[]; findings?: Finding[];
 }
 
 function money(currency: string) {
@@ -183,6 +184,21 @@ export function Media({ workspaceId, notify, range, onRange, canEdit }: { worksp
               <Table head={['Creative', 'Spend', 'Completion', 'Cost per completed view']} rows={(d.creatives ?? []).slice(0, 15).map(c => [<span key="n"><b>{c.creative || '(none)'}</b><div className="small muted">{CHANNEL_LABEL[c.channel]}</div></span>, fm(c.cost), rate(c.completion), fm(c.costPerQualityComplete)])} />
             </section>
           </div>
+
+          {(d.creativeTrend?.length ?? 0) > 0 && (
+            <section className="panel">
+              <div className="panel-head"><div><h2>Creative fatigue</h2><p>Week by week, how each creative holds attention: completion for video and audio, click rate for display. A creative is wearing out when its last two weeks fall more than 12% below its first two.</p></div></div>
+              <div className="fatigue-grid">{d.creativeTrend!.map(c => (
+                <div key={`${c.channel}${c.creative}`} className={`fatigue ${c.status.replace(' ', '-')}`}>
+                  <span className="ht-head"><b className="sc-name" title={c.creative}>{c.creative}</b><span className={`tag ${c.status === 'wearing out' ? 'leak' : c.status === 'slipping' ? 'warn' : c.status === 'steady' ? 'ok' : 'plain'}`}>{c.status === 'new' ? 'too new to judge' : c.status}</span></span>
+                  <span className="small muted">{CHANNEL_LABEL[c.channel]} · {c.weeks} weeks · {fm(c.cost)}</span>
+                  {c.series.length > 1 && <Sparkline values={c.series.map(x => x.value)} color={c.status === 'wearing out' ? 'var(--leak)' : c.status === 'slipping' ? 'var(--warn)' : 'var(--flow)'} height={44} />}
+                  <span className="small">{c.measure === 'completion' ? 'Completion' : 'Click rate'} {c.measure === 'completion' ? pct(c.early) : `${(c.early * 100).toFixed(2)}%`} → <b>{c.measure === 'completion' ? pct(c.late) : `${(c.late * 100).toFixed(2)}%`}</b>{c.change !== null ? ` (${c.change >= 0 ? '+' : '−'}${Math.abs(Math.round(c.change * 100))}%)` : ''}</span>
+                  {c.status === 'wearing out' && <span className="small"><b>Do:</b> rotate in a fresh cut, or cap frequency on this creative.</span>}
+                </div>
+              ))}</div>
+            </section>
+          )}
 
           <section className="panel">
             <div className="panel-head"><div><h2>Sites and apps</h2><p>The 30 with the most spend. Red marks completion under 60% of its channel, or viewability under half.</p></div></div>

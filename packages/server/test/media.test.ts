@@ -70,6 +70,7 @@ describe('media reports', () => {
     expect(c.previousRange).toEqual({ from: '2026-10-08', to: '2026-10-21' });
     expect(c.previous.cost).toBeGreaterThan(0);
     expect(c.trend).toHaveLength(14);
+    expect(m.creativeTrend.find((x: any) => x.creative === 'Nautica 30s Hero').status).toBe('wearing out');
   });
 
   it('refuses to add mixed currencies together and warns about overlapping reports', async () => {

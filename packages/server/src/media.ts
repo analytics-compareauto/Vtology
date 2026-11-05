@@ -111,7 +111,7 @@ export async function mediaOverview(ctx: Ctx, range: { from: string; to: string 
   requireRole(ctx, VIEWERS, 'Media reports');
   // the answer only changes when reports change: keep it, keyed by the question and the reports' state
   const [v] = await ctx.db.admin.query<{ version: string }>(`select coalesce(count(*)::text || ':' || max(created_at)::text || ':' || sum(rows)::text || ':' || string_agg(status, ''), 'none') as version from vt.media_reports where tenant_id = $1`, [ctx.tenantId]);
-  const key = JSON.stringify([range.from, range.to, opts.channel ?? null, opts.report ?? null]);
+  const key = JSON.stringify(['v2', range.from, range.to, opts.channel ?? null, opts.report ?? null]); // bump when the result's shape changes
   const [hit] = await ctx.db.admin.query<{ result: unknown }>(`select result from vt.media_cache where tenant_id = $1 and key = $2 and version = $3`, [ctx.tenantId, key, v!.version]);
   if (hit) return typeof hit.result === 'string' ? JSON.parse(hit.result) : hit.result;
   const result = await computeMediaOverview(ctx, range, opts);
@@ -190,5 +190,21 @@ async function computeMediaOverview(ctx: Ctx, range: { from: string; to: string 
     trend: points.map(p => ({ x: p.x, cost: p.sums.cost, completes: p.sums.completes, impressions: p.sums.impressions })),
     supply: withM(bySupply), sites: withM(bySite, 100), lineItems: withM(byLine), creatives: withM(byCreative, 60), devices: withM(byDevice), regions: withM(byRegion, 40),
     findings,
+    creativeTrend: creativeTrend(byCreativeWeek, byCreative),
   };
+}
+
+/** Week by week, per creative (the 15 with most spend): completion, or click rate where nothing plays. */
+function creativeTrend(weeks: ({ channel: Channel; creative: string; week: string } & Record<string, unknown>)[], totals: ({ channel: Channel; creative: string } & Record<string, unknown>)[]) {
+  const top = totals.map(t => ({ t, s: pickSums(t) })).sort((a, b) => b.s.cost - a.s.cost).slice(0, 15);
+  return top.map(({ t, s }) => {
+    const ws = weeks.filter(w => w.creative === t.creative && w.channel === t.channel).map(w => ({ week: w.week, m: metrics(pickSums(w)) })).filter(w => w.m.impressions >= 200).sort((a, b) => a.week.localeCompare(b.week));
+    const plays = s.completes > 0;
+    const series = ws.map(w => ({ week: w.week, value: plays ? w.m.completion ?? 0 : w.m.ctr ?? 0, impressions: w.m.impressions }));
+    const early = series.slice(0, 2), late = series.slice(-2);
+    const avg = (xs: typeof series) => (xs.length ? xs.reduce((a, x) => a + x.value, 0) / xs.length : 0);
+    const change = series.length >= 4 && avg(early) > 0 ? avg(late) / avg(early) - 1 : null;
+    return { creative: t.creative || '(none)', channel: t.channel, measure: plays ? 'completion' : 'click rate', weeks: series.length, cost: s.cost, series, early: avg(early), late: avg(late), change,
+      status: change === null ? 'new' : change <= -0.12 ? 'wearing out' : change <= -0.05 ? 'slipping' : 'steady' };
+  });
 }
