@@ -34,8 +34,8 @@ export async function healthSummary(ctx: Ctx) {
   // growth: followers now vs 30 days ago, own accounts
   const [g] = await q<{ now: number; before: number }>(`select coalesce(sum(case when d.day = x.last then d.followers end),0)::float as now, coalesce(sum(case when d.day = x.first then d.followers end),0)::float as before
     from vt.social_account_daily d join vt.social_accounts a on a.id = d.account_id
-    join (select account_id, max(day) as last, min(day) filter (where day >= current_date - 30) as first from vt.social_account_daily where tenant_id = $1 group by account_id) x on x.account_id = d.account_id
-    where d.tenant_id = $1 and not a.is_competitor`);
+    join (select account_id, max(day) as last, min(day) filter (where day >= current_date - 30) as first from vt.social_account_daily where tenant_id = $1 and followers is not null group by account_id) x on x.account_id = d.account_id
+    where d.tenant_id = $1 and not a.is_competitor and d.followers is not null and x.first <= x.last - 20`);
   if (g!.now) { const c = chg(g!.now, g!.before); tiles.push({ area: 'Growth', tab: 'growth', status: c < 0 ? 'fix' : c < 0.005 ? 'watch' : 'good', figure: signed(c), label: 'followers in 30 days', detail: `${Math.round(g!.now).toLocaleString('en-IN')} followers across your accounts.` }); }
 
   // content: tracked searches and whether the brand ranks
