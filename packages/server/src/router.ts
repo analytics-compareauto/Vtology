@@ -182,7 +182,9 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
   } catch (e) {
     if (e instanceof HttpError) return json(e.status, { error: e.message, details: e.details });
     console.error(e);
-    return json(500, { error: 'Something went wrong on our side. The error has been logged.' });
+    // a short reason helps whoever reports it; no stack, no data
+    const reason = String((e as Error)?.message ?? '').replace(/\s+/g, ' ').slice(0, 160);
+    return json(500, { error: `Something went wrong on our side${reason ? ` (${reason})` : ''}. The error has been logged.` });
   }
 }
 
