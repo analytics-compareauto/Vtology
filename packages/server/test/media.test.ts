@@ -85,3 +85,25 @@ describe('media reports', () => {
     expect((await call(token, 'DELETE', `${T}/media/reports/${r.body.id}`)).body.removed).toBe(true);
   });
 });
+
+describe('reach reports', () => {
+  it('reads people reached per line and day, and flags lines showing the ad too often', async () => {
+    const { isReachReport, toReachRows } = await import('@vtology/core');
+    const header = ['Advertiser', 'Advertiser Currency', 'Campaign', 'Insertion Order', 'Date', 'Impressions', 'Clicks', 'Total Media Cost (Advertiser Currency)', 'Unique Reach: Total Reach'];
+    const cols = detectMediaColumns(header);
+    expect(isReachReport(cols)).toBe(true);
+    const raw = Array.from({ length: 10 }, (_, i) => ({ Date: `2026/10/${String(i + 1).padStart(2, '0')}`, 'Insertion Order': 'Navigator CTV', Impressions: '12000', 'Total Media Cost (Advertiser Currency)': '60', 'Unique Reach: Total Reach': '2000' }))
+      .concat(Array.from({ length: 10 }, (_, i) => ({ Date: `2026/10/${String(i + 1).padStart(2, '0')}`, 'Insertion Order': 'Navigator YouTube', Impressions: '20000', 'Total Media Cost (Advertiser Currency)': '70', 'Unique Reach: Total Reach': '19000' })))
+      .concat([{ Date: '45940', 'Insertion Order': 'Navigator YouTube', Impressions: '1', 'Total Media Cost (Advertiser Currency)': '0', 'Unique Reach: Total Reach': '-' }]) as Record<string, string>[];
+    const { rows } = toReachRows(raw, cols);
+    expect(rows.at(-1)!.day).toBe('2025-10-10'); // Excel date number
+    const r = await call(token, 'POST', `${T}/media/reports`, { name: 'Reach Oct', kind: 'reach', currency: 'CAD' });
+    expect((await call(token, 'POST', `${T}/media/reports/${r.body.id}/rows`, { rows })).body.accepted).toBe(21);
+    await call(token, 'POST', `${T}/media/reports/${r.body.id}/finish`);
+    const m = (await call(token, 'GET', `${T}/media?from=2026-10-01&to=2026-10-31`)).body;
+    const ctv = m.frequency.find((l: any) => l.campaign === 'Navigator CTV');
+    expect(ctv).toMatchObject({ channel: 'ctv', days: 10, dailyReach: 2000, dailyFrequency: 6 });
+    expect(m.frequencyFindings[0].title).toMatch(/Navigator CTV: each person saw the ad 6\.0 times a day/);
+    expect(m.frequencyFindings.some((f: any) => /YouTube/.test(f.title))).toBe(false);
+  });
+});

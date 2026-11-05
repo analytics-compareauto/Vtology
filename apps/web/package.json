@@ -10,6 +10,7 @@
   "dependencies": {
     "@vtology/core": "*",
     "@vtology/server": "*",
+    "fflate": "0.8.2",
     "next": "15.5.28",
     "react": "19.1.1",
     "react-dom": "19.1.1"

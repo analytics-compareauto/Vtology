@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CHANNEL_LABEL, detectMediaColumns, parseCsv, sampleMediaCsv, toMediaRows, type Channel, type MediaColumns, type MediaField, type MediaRow } from '@vtology/core';
+import { CHANNEL_LABEL, detectMediaColumns, isReachReport, sampleMediaCsv, streamCsv, toMediaRows, toReachRows, type Channel, type MediaColumns, type MediaField, type MediaRow, type ReachRow } from '@vtology/core';
+import { readXlsx } from '../xlsx';
 import { api, ApiError } from '../api';
 import { BarChart, LineChart } from '../charts';
 import { DateRangePicker, previousText, rangeQuery, rangeText, todayIST, type Range } from '../DateRange';
@@ -8,9 +9,10 @@ import { compact, num, pct } from '../format';
 
 interface M { impressions: number; clicks: number; cost: number; completes: number; starts: number; cpm: number | null; completion: number | null; costPerComplete: number | null; viewability: number | null; audibleViewable: number | null; costPerQualityComplete: number | null; qualityCompletes: number }
 interface Finding { tone: 'good' | 'bad' | 'info'; channel?: Channel; title: string; detail: string; action?: string; names?: string[] }
-interface Report { id: string; name: string; currency: string; date_from: string; date_to: string; rows: number; status: string }
+interface Report { id: string; name: string; kind?: string; currency: string; date_from: string; date_to: string; rows: number; status: string }
+interface Freq { campaign: string; channel: Channel; days: number; impressions: number; cost: number; dailyReach: number; dailyFrequency: number; maxFrequency: number }
 interface Data {
-  reports: Report[]; coverage: { from: string; to: string } | null; currencies: string[]; empty: boolean; mixed?: boolean;
+  reports: Report[]; coverage: { from: string; to: string } | null; currencies: string[]; empty: boolean; mixed?: boolean; frequency?: Freq[]; frequencyFindings?: Finding[]; reachCurrency?: string;
   currency?: string; range?: { from: string; to: string }; weekly?: boolean; total?: M; previous?: M;
   channels?: (M & { channel: Channel; label: string; quartiles: { at: string; share: number }[] | null })[];
   trend?: { x: string; cost: number; completes: number; impressions: number }[];
@@ -62,11 +64,13 @@ export function Media({ workspaceId, notify, range, onRange, canEdit }: { worksp
 
   if (err) return <div className="error-box" role="alert">{err}</div>;
   if (!d) return <div className="progress" />;
-  const fm = money(d.currency ?? d.currencies[0] ?? '');
+  const fm = money(d.currency ?? d.currencies[0] ?? d.reachCurrency ?? '');
   const ready = d.reports.filter(r => r.status === 'ready');
+  const freq = d.frequency ?? [];
+  const allFindings = [...(d.frequencyFindings ?? []), ...(d.findings ?? [])];
 
   const importer = importing && <ImportReport T={T} onDone={async (msg, cov) => { setImporting(false); if (msg) { notify(msg); if (cov) onRange({ preset: 'custom', from: cov.from, to: cov.to }); else await load(); } }} />;
-  if (!ready.length) return (
+  if (!ready.length && !freq.length) return (
     <div style={{ display: 'grid', gap: 16 }}>
       {importer}
       {!importing && <div className="empty" style={{ display: 'grid', gap: 12, justifyItems: 'center' }}>
@@ -91,13 +95,27 @@ export function Media({ workspaceId, notify, range, onRange, canEdit }: { worksp
             <button aria-pressed={channel === 'all'} onClick={() => setChannel('all')}>All channels</button>
             {presentChannels.map(c => <button key={c} aria-pressed={channel === c} onClick={() => setChannel(c)}>{CHANNEL_LABEL[c]}</button>)}
           </div>
-          {ready.length > 1 && <select className="input" style={{ width: 'auto' }} value={report} onChange={e => setReport(e.target.value)} aria-label="Report"><option value="">All reports</option>{ready.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>}
+          {ready.filter(r => r.kind !== 'reach').length > 1 && <select className="input" style={{ width: 'auto' }} value={report} onChange={e => setReport(e.target.value)} aria-label="Report"><option value="">All reports</option>{ready.filter(r => r.kind !== 'reach').map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>}
         </div>
         {canEdit && !importing && <button className="btn" onClick={() => setImporting(true)}>Import a report</button>}
       </div>
       {importer}
       {d.mixed && <div className="note-box">These reports are in different currencies ({d.currencies.join(', ')}), so they can't be added together. Choose one report above.</div>}
       {outside && d.coverage && <div className="note-box">Your reports cover {rangeText(d.coverage)}, outside the dates chosen. <button className="btn small link" onClick={() => onRange({ preset: 'custom', from: d.coverage!.from, to: d.coverage!.to })}>Show {rangeText(d.coverage)}</button></div>}
+      {allFindings.length > 0 && (
+        <section className="panel">
+          <div className="panel-head"><div><h2>What to change</h2><p>Found by comparing every deal, site, creative, device and region with the rest of the same campaign, and by how often the same people saw each line.</p></div></div>
+          <div className="rows">{allFindings.map((f, i) => <FindingRow key={i} f={f} />)}</div>
+        </section>
+      )}
+      {freq.length > 0 && (
+        <section className="panel">
+          <div className="panel-head"><div><h2>Reach and frequency</h2><p>From the reach report: on an average day, how many people each line reached and how many times each of them saw the ad. Reach can’t be added across days, so these are daily figures.</p></div></div>
+          <Table head={['Line', 'Spend', 'Impressions', 'People reached a day', 'Ads per person a day', 'Worst day']} rows={freq.map(l => [
+            <span key="n"><b>{l.campaign}</b><div className="small muted">{CHANNEL_LABEL[l.channel]}, {l.days} days</div></span>, fm(l.cost), compact(l.impressions), compact(l.dailyReach),
+            <b key="f" style={{ color: l.dailyFrequency >= 4 ? 'var(--leak)' : l.dailyFrequency >= 3 ? 'var(--warn)' : undefined }}>{l.dailyFrequency.toFixed(1)}</b>, l.maxFrequency.toFixed(1)])} />
+        </section>
+      )}
       {!d.empty && t && p && (
         <>
           <section className="kpis" aria-label="Key figures" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
@@ -110,14 +128,6 @@ export function Media({ workspaceId, notify, range, onRange, canEdit }: { worksp
           </section>
           <p className="small muted" style={{ marginTop: -10 }}>{rangeText(range)}, against {previousText(range)}. Amounts in {d.currency || 'the report currency'}.</p>
 
-          {(d.findings?.length ?? 0) > 0 && (
-            <section className="panel">
-              <div className="panel-head"><div><h2>What to change</h2><p>Found by comparing every deal, site, creative, device and region with the rest of the same campaign.</p></div></div>
-              <div className="rows">
-                {d.findings!.map((f, i) => <FindingRow key={i} f={f} />)}
-              </div>
-            </section>
-          )}
 
           <div className="grid-2">
             <section className="panel">
@@ -245,7 +255,7 @@ function IndexTable({ rows, channels, fm, flag }: { rows: { name: string; tag?: 
 // ---------------------------------------------------------------- importing
 const FIELD_NAME: Partial<Record<MediaField, string>> = {
   day: 'Date', campaign: 'Campaign or insertion order', lineItem: 'Line item', lineItemType: 'Line item type', creative: 'Creative', exchange: 'Exchange', inventorySource: 'Inventory source (deal)',
-  site: 'App or site', device: 'Device', region: 'Region', currency: 'Currency', impressions: 'Impressions', cost: 'Media cost', viewable: 'Viewable impressions', measurable: 'Measurable impressions',
+  site: 'App or site', device: 'Device', region: 'Region', currency: 'Currency', advertiser: 'Advertiser', reach: 'People reached', impressions: 'Impressions', cost: 'Media cost', viewable: 'Viewable impressions', measurable: 'Measurable impressions',
   starts: 'Starts', q1: '25% views', q2: '50% views', q3: '75% views', completes: 'Completed views or listens', audible: 'Audible and visible at completion', clicks: 'Clicks', conversions: 'Conversions',
 };
 const NEEDED: MediaField[] = ['day', 'impressions', 'cost'];
@@ -253,40 +263,69 @@ const NEEDED: MediaField[] = ['day', 'impressions', 'cost'];
 function ImportReport({ T, onDone }: { T: string; onDone: (msg: string | null, coverage?: { from: string; to: string }) => void }) {
   const [name, setName] = useState('');
   const [currency, setCurrency] = useState('');
-  const [parsed, setParsed] = useState<{ rows: MediaRow[]; skipped: number; cols: MediaColumns; header: string[] } | null>(null);
+  const [reading, setReading] = useState<number | null>(null);
+  const [parsed, setParsed] = useState<{ kind: 'delivery' | 'reach'; rows: MediaRow[]; reach: ReachRow[]; skipped: number; cols: MediaColumns; header: string[] } | null>(null);
+  const [pick, setPick] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  async function pick(f: File | undefined) {
+  async function choose(f: File | undefined) {
     setErr(null); setParsed(null);
     if (!f) return;
-    if (!name) setName(f.name.replace(/\.(csv|txt)$/i, '').slice(0, 100));
+    if (!name) setName(f.name.replace(/\.(csv|txt|xlsx)$/i, '').slice(0, 100));
+    setReading(0);
     try {
-      // DV360 adds a blank line and report notes after the data; parse only up to there
-      const text = (await f.text()).replace(/\r/g, '').split(/\n\s*\n/)[0]!;
-      const raw = parseCsv(text);
-      if (!raw.length) { setErr('The file has no rows under its header.'); return; }
-      const header = Object.keys(raw[0]!);
-      const cols = detectMediaColumns(header);
-      const out = toMediaRows(raw, cols, currency);
-      setParsed({ ...out, cols, header });
-      const cur = out.rows.find(r => r.currency)?.currency;
+      // rows are turned into compact records as they're read, so files of hundreds of MB fit in the browser
+      let cols: MediaColumns | null = null, header: string[] = [], reachMode = false, skipped = 0, seen = 0;
+      const rows: MediaRow[] = [], reach: ReachRow[] = [];
+      const take = (r: Record<string, string>) => {
+        if (!cols) { header = Object.keys(r); cols = detectMediaColumns(header); reachMode = isReachReport(cols); }
+        if (reachMode) { const o = toReachRows([r], cols); reach.push(...o.rows); skipped += o.skipped; }
+        else { const o = toMediaRows([r], cols, currency); rows.push(...o.rows); skipped += o.skipped; }
+        if (++seen % 20000 === 0) setReading(seen);
+      };
+      if (/\.xlsx$/i.test(f.name)) (await readXlsx(f)).forEach(take);
+      else await streamCsv(f, take);
+      if (!cols) { setErr('The file has no rows under its header.'); setReading(null); return; }
+      const result = { kind: reachMode ? 'reach' as const : 'delivery' as const, rows, reach, skipped, cols, header };
+      setParsed(result);
+      setPick(new Set(reachMode ? reach.map(r => r.campaign) : rows.map(r => r.campaign)));
+      const cur = rows.find(r => r.currency)?.currency;
       if (cur && !currency) setCurrency(cur);
-    } catch { setErr('Could not read the file. Export the report as CSV and try again.'); }
+      // a file that stops in the middle of a line was cut short (a size limit on the way)
+      if (f.size >= 50 * 1024 * 1024 && !/\.xlsx$/i.test(f.name)) {
+        const tail = await f.slice(Math.max(0, f.size - 2)).text();
+        if (!tail.endsWith('\n')) setErr(`This file ends in the middle of a line, so it was probably cut short (it is ${Math.round(f.size / 1048576)} MB). Check that it holds everything, or export it in smaller parts (for example without App/URL).`);
+      }
+    } catch { setErr('Could not read the file. Export the report as CSV (or Excel) and try again.'); }
+    finally { setReading(null); }
   }
-  const missing = parsed ? NEEDED.filter(f => !parsed.cols[f]?.length) : [];
-  const byChannel = useMemo(() => { const c: Record<string, number> = {}; for (const r of parsed?.rows ?? []) c[r.channel] = (c[r.channel] ?? 0) + r.cost; return c; }, [parsed]);
-  const dates = parsed?.rows.length ? { from: parsed.rows.reduce((a, r) => (r.day < a ? r.day : a), parsed.rows[0]!.day), to: parsed.rows.reduce((a, r) => (r.day > a ? r.day : a), parsed.rows[0]!.day) } : null;
+
+  const missing = parsed ? (parsed.kind === 'reach' ? (['day', 'impressions'] as MediaField[]) : NEEDED).filter(f => !parsed.cols[f]?.length) : [];
+  // the lines in the file (insertion orders), with spend, so another client's campaigns can be left out
+  const lines = useMemo(() => {
+    const m = new Map<string, { cost: number; rows: number; advertiser: string }>();
+    if (parsed?.kind === 'reach') for (const r of parsed.reach) { const x = m.get(r.campaign) ?? { cost: 0, rows: 0, advertiser: '' }; x.cost += r.cost; x.rows++; m.set(r.campaign, x); }
+    else for (const r of parsed?.rows ?? []) { const x = m.get(r.campaign) ?? { cost: 0, rows: 0, advertiser: r.advertiser }; x.cost += r.cost; x.rows++; m.set(r.campaign, x); }
+    return [...m.entries()].sort((a, b) => b[1].cost - a[1].cost);
+  }, [parsed]);
+  const chosenRows = parsed ? (parsed.kind === 'reach' ? parsed.reach.filter(r => pick.has(r.campaign)).length : parsed.rows.filter(r => pick.has(r.campaign)).length) : 0;
+  const dates = useMemo(() => {
+    const ds = parsed ? (parsed.kind === 'reach' ? parsed.reach.map(r => r.day) : parsed.rows.map(r => r.day)) : [];
+    return ds.length ? { from: ds.reduce((a, b) => (b < a ? b : a)), to: ds.reduce((a, b) => (b > a ? b : a)) } : null;
+  }, [parsed]);
+  const byChannel = useMemo(() => { const c: Record<string, number> = {}; for (const r of parsed?.rows ?? []) if (pick.has(r.campaign)) c[r.channel] = (c[r.channel] ?? 0) + r.cost; return c; }, [parsed, pick]);
 
   async function upload() {
     if (!parsed) return;
     setErr(null); setProgress(0);
     let id: string | null = null;
     try {
-      const r = await api<{ id: string; chunkMax: number }>('POST', `${T}/media/reports`, { name, currency, columns: parsed.cols });
+      const r = await api<{ id: string; chunkMax: number }>('POST', `${T}/media/reports`, { name, currency, columns: parsed.cols, kind: parsed.kind });
       id = r.id;
-      const rows = parsed.rows.map(x => ({ ...x, currency: x.currency || currency }));
-      for (let i = 0; i < rows.length; i += r.chunkMax) { await api('POST', `${T}/media/reports/${id}/rows`, { rows: rows.slice(i, i + r.chunkMax) }); setProgress(Math.min(1, (i + r.chunkMax) / rows.length)); }
+      const rows: object[] = parsed.kind === 'reach' ? parsed.reach.filter(x => pick.has(x.campaign)) : parsed.rows.filter(x => pick.has(x.campaign)).map(x => ({ ...x, currency: x.currency || currency }));
+      const size = parsed.kind === 'reach' ? 5000 : 2500;
+      for (let i = 0; i < rows.length; i += size) { await api('POST', `${T}/media/reports/${id}/rows`, { rows: rows.slice(i, i + size) }); setProgress(Math.min(1, (i + size) / rows.length)); }
       const f = await api<{ rows: number; from: string; to: string; overlaps: string[] }>('POST', `${T}/media/reports/${id}/finish`);
       onDone(`${name}: ${num(f.rows)} rows from ${rangeText(f)}.${f.overlaps.length ? ` It covers the same days as ${f.overlaps.join(', ')}; delete one so delivery isn't counted twice.` : ''}`, { from: f.from, to: f.to });
     } catch (e) {
@@ -298,29 +337,42 @@ function ImportReport({ T, onDone }: { T: string; onDone: (msg: string | null, c
 
   return (
     <div className="note-box" style={{ display: 'grid', gap: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-      <b>Import a delivery report</b>
-      <span className="small muted">In DV360: Reporting, New report, Standard, by Date, saved as CSV. Other DSPs work too if the file has a date, impressions and cost per row.</span>
+      <b>Import a report</b>
+      <span className="small muted">A DV360 delivery report (Reporting, New report, Standard, by Date) or a reach report with Unique Reach, as CSV or Excel. Other DSPs work too if each row has a date, impressions and cost.</span>
       <div className="grid-2" style={{ gap: 12 }}>
-        <label className="field">File<input className="input" type="file" accept=".csv,text/csv" onChange={e => pick(e.target.files?.[0])} /></label>
+        <label className="field">File<input className="input" type="file" accept=".csv,text/csv,.xlsx" onChange={e => choose(e.target.files?.[0])} /></label>
         <label className="field">Name<input className="input" value={name} onChange={e => setName(e.target.value)} maxLength={100} placeholder="Lincoln CTV and audio, Q4" /></label>
         <label className="field">Currency<input className="input" value={currency} onChange={e => setCurrency(e.target.value.toUpperCase().slice(0, 3))} placeholder="CAD" /></label>
       </div>
+      {reading !== null && <div><div className="progress" /><p className="small muted" style={{ marginTop: 6 }}>Reading the file… {reading ? `${num(reading)} rows so far` : ''}</p></div>}
       {parsed && (
         <>
-          <span className="small"><b>{num(parsed.rows.length)} rows</b>{dates ? `, ${rangeText(dates)}` : ''}{parsed.skipped ? `; ${num(parsed.skipped)} lines without a date left out (report notes and totals)` : ''}. Spend by channel: {Object.entries(byChannel).map(([c, v]) => `${CHANNEL_LABEL[c as Channel]} ${money(currency)(v)}`).join(', ') || 'none'}.</span>
-          <div className="table-wrap" style={{ boxShadow: 'none' }}>
-            <table>
-              <thead><tr><th>Vtology reads</th><th>From your column</th></tr></thead>
-              <tbody>{(Object.keys(FIELD_NAME) as MediaField[]).map(f => <tr key={f}><td>{FIELD_NAME[f]}</td><td>{parsed.cols[f]?.join(' + ') ?? <span className="muted">{NEEDED.includes(f) ? <b style={{ color: 'var(--leak)' }}>missing</b> : 'not in this report'}</span>}</td></tr>)}</tbody>
-            </table>
-          </div>
-          {missing.length > 0 && <div className="error-box">The report needs {missing.map(m => FIELD_NAME[m]).join(', ')} to be read.</div>}
+          <span className="small"><b>{parsed.kind === 'reach' ? 'Reach report' : 'Delivery report'}: {num(parsed.kind === 'reach' ? parsed.reach.length : parsed.rows.length)} rows</b>{dates ? `, ${rangeText(dates)}` : ''}{parsed.skipped ? `; ${num(parsed.skipped)} lines without a date left out (report notes and totals)` : ''}.
+            {parsed.kind === 'delivery' && <> Spend by channel in the chosen lines: {Object.entries(byChannel).map(([c, v]) => `${CHANNEL_LABEL[c as Channel]} ${money(currency)(v)}`).join(', ') || 'none'}.</>}</span>
+          {lines.length > 1 && (
+            <div style={{ display: 'grid', gap: 6 }}>
+              <span className="small"><b>Which lines belong to this brand?</b> The file has {lines.length}. Untick other clients’ campaigns.
+                <button className="btn small link" onClick={() => setPick(new Set(lines.map(l => l[0])))}>All</button><button className="btn small link" onClick={() => setPick(new Set())}>None</button></span>
+              <div className="aud-pick" style={{ maxHeight: 220, overflow: 'auto' }}>
+                {lines.map(([c, x]) => <label key={c}><input type="checkbox" checked={pick.has(c)} onChange={() => { const n = new Set(pick); if (n.has(c)) n.delete(c); else n.add(c); setPick(n); }} /> {c} <span className="muted small">{money(currency)(x.cost)}, {num(x.rows)} rows</span></label>)}
+              </div>
+            </div>
+          )}
+          <details><summary className="small">Which column Vtology reads for each figure</summary>
+            <div className="table-wrap" style={{ boxShadow: 'none', marginTop: 8 }}>
+              <table>
+                <thead><tr><th>Vtology reads</th><th>From your column</th></tr></thead>
+                <tbody>{(Object.keys(FIELD_NAME) as MediaField[]).map(f => <tr key={f}><td>{FIELD_NAME[f]}</td><td>{parsed.cols[f]?.join(' + ') ?? <span className="muted">{NEEDED.includes(f) && parsed.kind === 'delivery' ? <b style={{ color: 'var(--leak)' }}>missing</b> : 'not in this report'}</span>}</td></tr>)}</tbody>
+              </table>
+            </div>
+          </details>
+          {missing.length > 0 && <div className="error-box">The report needs {missing.map(m => FIELD_NAME[m] ?? m).join(', ')} to be read.</div>}
         </>
       )}
       {err && <div className="error-box" role="alert">{err}</div>}
       {progress !== null && <div><div className="share-bar"><i style={{ width: `${progress * 100}%` }} /></div><p className="small muted" style={{ marginTop: 6 }}>Importing… {pct(progress)}</p></div>}
       <div className="toolbar">
-        <button className="btn primary" disabled={!parsed || missing.length > 0 || !parsed.rows.length || !name.trim() || progress !== null} onClick={upload}>Import {parsed ? num(parsed.rows.length) : ''} rows</button>
+        <button className="btn primary" disabled={!parsed || missing.length > 0 || !chosenRows || !name.trim() || progress !== null} onClick={upload}>Import {chosenRows ? num(chosenRows) : ''} rows</button>
         <button className="btn" onClick={() => onDone(null)} disabled={progress !== null}>Cancel</button>
       </div>
     </div>

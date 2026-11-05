@@ -28,6 +28,28 @@ export const CANONICAL: Record<Entity, { required: string[]; optional: string[] 
 export interface RowError { row: number; field: string; message: string }
 export interface MappedResult { records: Record<string, unknown>[]; errors: RowError[]; rowCount: number }
 
+/**
+ * Read a large CSV row by row (in the browser: a File, without holding the whole file as objects).
+ * Stops at the first blank line, where DV360 starts its report notes.
+ */
+export function streamCsv(input: Blob | string, onRow: (row: Record<string, string>) => void): Promise<{ header: string[]; rows: number }> {
+  return new Promise((resolve, reject) => {
+    let header: string[] = [], rows = 0, done = false;
+    Papa.parse<Record<string, string>>(input as never, {
+      header: true, skipEmptyLines: false, transformHeader: (h: string) => h.trim(),
+      step: (res: Papa.ParseStepResult<Record<string, string>>, parser: Papa.Parser) => {
+        if (done) return;
+        if (!header.length) header = res.meta.fields ?? [];
+        const r = res.data;
+        if (!r || Object.values(r).every(v => v === '' || v === undefined)) { done = true; parser.abort(); return; }
+        rows++; onRow(r);
+      },
+      complete: () => resolve({ header, rows }),
+      error: (e: Error) => reject(e),
+    } as never);
+  });
+}
+
 export function parseCsv(text: string): Record<string, string>[] {
   const out = Papa.parse<Record<string, string>>(text.trim(), { header: true, skipEmptyLines: true, transformHeader: h => h.trim() });
   return out.data;

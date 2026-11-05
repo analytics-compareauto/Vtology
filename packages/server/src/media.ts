@@ -3,7 +3,7 @@
  * The browser reads the CSV, works out the columns and sends rows in chunks; the server checks every
  * value, stores it, and answers with metrics, comparisons and findings for any date range.
  */
-import { CHANNEL_LABEL, addSums, mediaFindings, metrics, quartiles, ZERO, type Channel, type Group, type Sums } from '@vtology/core';
+import { CHANNEL_LABEL, addSums, frequencyFindings, frequencyLines, mediaFindings, metrics, quartiles, ZERO, type Channel, type Group, type ReachRow, type Sums } from '@vtology/core';
 import { HttpError, requireRole, type Ctx } from './context';
 
 const EDITORS: Ctx['role'][] = ['marketing_head', 'data_steward'];
@@ -16,17 +16,17 @@ const TEXTS = ['campaign', 'lineItem', 'lineItemType', 'creative', 'exchange', '
 
 export async function listReports(ctx: Ctx) {
   requireRole(ctx, VIEWERS, 'Media reports');
-  return ctx.db.admin.query(`select id, name, source, currency, status, rows, date_from, date_to, created_at from vt.media_reports where tenant_id = $1 order by created_at desc`, [ctx.tenantId]);
+  return ctx.db.admin.query(`select id, name, kind, source, currency, status, rows, date_from, date_to, created_at from vt.media_reports where tenant_id = $1 order by created_at desc`, [ctx.tenantId]);
 }
 
-export async function createReport(ctx: Ctx, body: { name?: unknown; currency?: unknown; source?: unknown; columns?: unknown }) {
+export async function createReport(ctx: Ctx, body: { name?: unknown; currency?: unknown; source?: unknown; columns?: unknown; kind?: unknown }) {
   requireRole(ctx, EDITORS, 'Uploading media reports');
   const name = typeof body.name === 'string' ? body.name.trim().slice(0, 100) : '';
   if (!name) throw new HttpError(400, 'Give the report a name, for example "Lincoln CTV, Oct".');
   const currency = typeof body.currency === 'string' ? body.currency.trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3) : '';
   const [row] = await ctx.db.admin.query<{ id: string }>(
-    `insert into vt.media_reports (tenant_id, name, source, currency, columns, created_by) values ($1,$2,$3,$4,$5,$6) on conflict (tenant_id, name) do nothing returning id`,
-    [ctx.tenantId, name, typeof body.source === 'string' ? body.source.slice(0, 40) : 'dv360', currency, JSON.stringify(body.columns ?? {}), ctx.userId]);
+    `insert into vt.media_reports (tenant_id, name, source, currency, columns, created_by, kind) values ($1,$2,$3,$4,$5,$6,$7) on conflict (tenant_id, name) do nothing returning id`,
+    [ctx.tenantId, name, typeof body.source === 'string' ? body.source.slice(0, 40) : 'dv360', currency, JSON.stringify(body.columns ?? {}), ctx.userId, body.kind === 'reach' ? 'reach' : 'delivery']);
   if (!row) throw new HttpError(409, `A report called "${name}" already exists. Delete it first, or choose another name.`);
   return { id: row.id, chunkMax: MEDIA_CHUNK };
 }
@@ -34,10 +34,16 @@ export async function createReport(ctx: Ctx, body: { name?: unknown; currency?: 
 export async function appendMediaRows(ctx: Ctx, id: string, body: { rows?: unknown }) {
   requireRole(ctx, EDITORS, 'Uploading media reports');
   if (!UUID.test(id)) throw new HttpError(404, 'Report not found.');
-  const [rep] = await ctx.db.admin.query<{ status: string; currency: string }>(`select status, currency from vt.media_reports where id = $1 and tenant_id = $2`, [id, ctx.tenantId]);
+  const [rep] = await ctx.db.admin.query<{ status: string; currency: string; kind: string }>(`select status, currency, kind from vt.media_reports where id = $1 and tenant_id = $2`, [id, ctx.tenantId]);
   if (!rep) throw new HttpError(404, 'Report not found.');
   if (rep.status !== 'uploading') throw new HttpError(409, 'This report is complete. Upload a new one to add rows.');
   if (!Array.isArray(body.rows) || body.rows.length > MEDIA_CHUNK) throw new HttpError(400, `Send up to ${MEDIA_CHUNK} rows at a time.`);
+  if (rep.kind === 'reach') {
+    const ok = (body.rows as Record<string, unknown>[]).filter(r => typeof r?.day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.day as string) && typeof r.campaign === 'string' && [r.impressions, r.reach, r.cost].every(n => Number.isFinite(Number(n ?? 0)) && Number(n ?? 0) >= 0));
+    if (ok.length) await ctx.db.admin.query(`insert into vt.media_reach (tenant_id, report_id, day, campaign, impressions, reach, cost) select $1, $2, d::date, c, i, r, k from unnest($3::text[], $4::text[], $5::numeric[], $6::numeric[], $7::numeric[]) as t(d, c, i, r, k)`,
+      [ctx.tenantId, id, ok.map(r => r.day), ok.map(r => String(r.campaign).slice(0, 200)), ok.map(r => Number(r.impressions ?? 0)), ok.map(r => Number(r.reach ?? 0)), ok.map(r => Number(r.cost ?? 0))]);
+    return { accepted: ok.length, refused: body.rows.length - ok.length };
+  }
   const cols: Record<string, unknown[]> = { day: [], channel: [], deal: [], currency: [] };
   for (const k of [...TEXTS, ...NUMS]) cols[k] = [];
   let bad = 0;
@@ -65,11 +71,14 @@ export async function appendMediaRows(ctx: Ctx, id: string, body: { rows?: unkno
 export async function finishReport(ctx: Ctx, id: string) {
   requireRole(ctx, EDITORS, 'Uploading media reports');
   if (!UUID.test(id)) throw new HttpError(404, 'Report not found.');
-  const [s] = await ctx.db.admin.query<{ n: number; f: string | null; t: string | null }>(`select count(*)::int as n, min(day)::text as f, max(day)::text as t from vt.media_rows where report_id = $1 and tenant_id = $2`, [id, ctx.tenantId]);
+  const [k] = await ctx.db.admin.query<{ kind: string }>(`select kind from vt.media_reports where id = $1 and tenant_id = $2`, [id, ctx.tenantId]);
+  if (!k) throw new HttpError(404, 'Report not found.');
+  const table = k.kind === 'reach' ? 'vt.media_reach' : 'vt.media_rows';
+  const [s] = await ctx.db.admin.query<{ n: number; f: string | null; t: string | null }>(`select count(*)::int as n, min(day)::text as f, max(day)::text as t from ${table} where report_id = $1 and tenant_id = $2`, [id, ctx.tenantId]);
   if (!s!.n) throw new HttpError(400, 'No rows arrived, so the report was not saved.');
   await ctx.db.admin.query(`update vt.media_reports set status = 'ready', rows = $3, date_from = $4, date_to = $5 where id = $1 and tenant_id = $2`, [id, ctx.tenantId, s!.n, s!.f, s!.t]);
   // another ready report covering the same days would count the same delivery twice
-  const overlap = await ctx.db.admin.query<{ name: string }>(`select name from vt.media_reports where tenant_id = $1 and id <> $2 and status = 'ready' and date_from <= $4 and date_to >= $3`, [ctx.tenantId, id, s!.f, s!.t]);
+  const overlap = await ctx.db.admin.query<{ name: string }>(`select name from vt.media_reports where tenant_id = $1 and id <> $2 and status = 'ready' and kind = $5 and date_from <= $4 and date_to >= $3`, [ctx.tenantId, id, s!.f, s!.t, k.kind]);
   return { rows: s!.n, from: s!.f, to: s!.t, overlaps: overlap.map(o => o.name) };
 }
 
@@ -98,12 +107,20 @@ export function moneyFormat(currency: string) {
 export async function mediaOverview(ctx: Ctx, range: { from: string; to: string }, opts: { channel?: string | null; report?: string | null }) {
   requireRole(ctx, VIEWERS, 'Media reports');
   const sql = ctx.db.admin;
-  const reports = await sql.query<{ id: string; name: string; currency: string; date_from: string; date_to: string; rows: number; created_at: string; status: string }>(
-    `select id, name, currency, date_from::text, date_to::text, rows, created_at, status from vt.media_reports where tenant_id = $1 order by created_at desc`, [ctx.tenantId]);
-  const ready = reports.filter(r => r.status === 'ready' && (!opts.report || r.id === opts.report));
+  const reports = await sql.query<{ id: string; name: string; kind: string; currency: string; date_from: string; date_to: string; rows: number; created_at: string; status: string }>(
+    `select id, name, kind, currency, date_from::text, date_to::text, rows, created_at, status from vt.media_reports where tenant_id = $1 order by created_at desc`, [ctx.tenantId]);
+  // frequency, from reach reports in the same dates
+  const reachIds = reports.filter(r => r.status === 'ready' && r.kind === 'reach').map(r => r.id);
+  const reachRows = reachIds.length ? (await sql.query<ReachRow & { impressions: string; reach: string; cost: string }>(
+    `select day::text as day, campaign, impressions, reach, cost from vt.media_reach where tenant_id = $1 and report_id = any($2::uuid[]) and day between $3::date and $4::date`, [ctx.tenantId, reachIds, range.from, range.to]))
+    .map(r => ({ day: r.day, campaign: r.campaign, impressions: Number(r.impressions), reach: Number(r.reach), cost: Number(r.cost) })) : [];
+  const frequency = frequencyLines(reachRows);
+  const reachCurrency = reports.find(r => r.kind === 'reach' && r.currency)?.currency ?? '';
+  const ready = reports.filter(r => r.status === 'ready' && r.kind !== 'reach' && (!opts.report || r.id === opts.report));
   const coverage = ready.length ? { from: ready.map(r => r.date_from).sort()[0]!, to: ready.map(r => r.date_to).sort().at(-1)! } : null;
   const currencies = [...new Set(ready.map(r => r.currency || ''))];
-  const base = { reports, coverage, currencies };
+  const reachCoverage = reachIds.length ? { from: reports.filter(r => reachIds.includes(r.id)).map(r => r.date_from).sort()[0]!, to: reports.filter(r => reachIds.includes(r.id)).map(r => r.date_to).sort().at(-1)! } : null;
+  const base = { reports, coverage: coverage ?? reachCoverage, currencies, frequency, frequencyFindings: frequencyFindings(frequency, moneyFormat(currencies[0] || reachCurrency)), reachCurrency };
   if (!ready.length) return { ...base, empty: true as const };
   if (currencies.length > 1) return { ...base, empty: true as const, mixed: true };
   const currency = currencies[0]!;

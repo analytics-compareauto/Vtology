@@ -7,8 +7,8 @@
  */
 
 // ---------------------------------------------------------------- reading a report
-export const MEDIA_FIELDS = ['day', 'campaign', 'lineItem', 'lineItemType', 'creative', 'creativeType', 'exchange', 'inventorySource', 'site', 'device', 'environment', 'region', 'currency',
-  'impressions', 'clicks', 'cost', 'viewable', 'measurable', 'starts', 'q1', 'q2', 'q3', 'completes', 'audible', 'conversions'] as const;
+export const MEDIA_FIELDS = ['day', 'advertiser', 'campaign', 'lineItem', 'lineItemType', 'creative', 'creativeType', 'exchange', 'inventorySource', 'site', 'device', 'environment', 'region', 'currency',
+  'impressions', 'clicks', 'cost', 'viewable', 'measurable', 'starts', 'q1', 'q2', 'q3', 'completes', 'audible', 'conversions', 'reach'] as const;
 export type MediaField = typeof MEDIA_FIELDS[number];
 const MULTI: MediaField[] = ['starts', 'q1', 'q2', 'q3', 'completes'];
 
@@ -16,6 +16,7 @@ const norm = (s: string) => s.toLowerCase().replace(/[_\s]+/g, ' ').trim();
 /** Header patterns, most specific first. DV360 names are covered; other DSPs' usual names too. */
 const PATTERNS: [MediaField, RegExp, RegExp?][] = [
   ['day', /^(date|day|report date|date \(.*\))$/],
+  ['advertiser', /^advertiser( name)?$/],
   ['lineItemType', /line item type|^media type$|^format$/],
   ['creativeType', /creative type/],
   ['campaign', /^(insertion order|campaign|campaign name|io|insertion order name)$/],
@@ -40,6 +41,7 @@ const PATTERNS: [MediaField, RegExp, RegExp?][] = [
   ['clicks', /^clicks$/],
   ['cost', /total media cost \(advertiser currency\)|^total media cost|media cost \(advertiser currency\)|^media cost|^spend|^cost$|revenue \(adv(ertiser)? currency\)/],
   ['conversions', /^(total conversions|conversions)$/],
+  ['reach', /unique reach: (total|impression) reach$|^unique reach$|^reach$|^impression reach$/],
 ];
 
 export type MediaColumns = Partial<Record<MediaField, string[]>>;
@@ -57,6 +59,9 @@ export function detectMediaColumns(header: string[]): MediaColumns {
       (out[field] ??= []).push(h); used.add(h);
     }
   }
+  // insertion order beats campaign when both exist: it is the level budgets and goals are set at
+  const io = header.find(h => /^(insertion order|insertion order name)$/.test(norm(h)));
+  if (io) out.campaign = [io];
   // several cost columns: total media cost (what the advertiser pays for media) wins
   const costs = header.filter(h => /total media cost|media cost|^spend|^cost$|revenue \(adv/.test(norm(h)) && !/ id$|%|ecpm|cpm|cpc|cpa|rate/.test(norm(h)));
   if (costs.length) out.cost = [costs.find(h => /total media cost/.test(norm(h)) && /advertiser/.test(norm(h))) ?? costs.find(h => /total media cost/.test(norm(h))) ?? costs[0]!];
@@ -78,10 +83,10 @@ export function channelOf(t: { lineItemType?: string; creativeType?: string; env
   return 'display';
 }
 
-export const isOpenAuction = (s: string | null | undefined) => !s || /^(open auction|open exchange|open|-|none|n\/a|\(not set\))$/i.test(s.trim());
+export const isOpenAuction = (s: string | null | undefined) => !s || /^(open auction|open exchange|open|-|none|n\/a|\(not set\)|unknown or unpermissioned inventory source|unknown)$/i.test(s.trim());
 
 export interface MediaRow {
-  day: string; campaign: string; lineItem: string; lineItemType: string; channel: Channel; creative: string; exchange: string; supply: string; deal: boolean;
+  day: string; advertiser: string; campaign: string; lineItem: string; lineItemType: string; channel: Channel; creative: string; exchange: string; supply: string; deal: boolean;
   site: string; device: string; region: string; currency: string;
   impressions: number; clicks: number; cost: number; viewable: number; measurable: number; starts: number; q1: number; q2: number; q3: number; completes: number; audible: number; conversions: number;
 }
@@ -89,6 +94,8 @@ export interface MediaRow {
 const toNum = (v: unknown) => { const s = String(v ?? '').replace(/[,\s$₹€£%]|CA\$|C\$/g, ''); const n = Number(s); return s && s !== '-' && Number.isFinite(n) ? n : 0; };
 function toDay(v: unknown): string | null {
   const s = String(v ?? '').trim();
+  // an Excel date saved as a number of days since 1899-12-30
+  if (/^\d{5}(\.\d+)?$/.test(s) && Number(s) > 30000 && Number(s) < 80000) return new Date(Date.UTC(1899, 11, 30) + Math.floor(Number(s)) * 86_400_000).toISOString().slice(0, 10);
   let m = s.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
   if (m) return `${m[1]}-${m[2]!.padStart(2, '0')}-${m[3]!.padStart(2, '0')}`;
   m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/); // dd/mm/yyyy, as Indian and Canadian exports often write it
@@ -109,7 +116,7 @@ export function toMediaRows(rows: Record<string, string>[], cols: MediaColumns, 
     const base = { lineItemType: one(r, 'lineItemType'), creativeType: one(r, 'creativeType'), environment: one(r, 'environment'), device: one(r, 'device'), lineItem: one(r, 'lineItem'), creative: one(r, 'creative'), starts: sum(r, 'starts'), completes: sum(r, 'completes') };
     const supply = one(r, 'inventorySource');
     out.push({
-      day, campaign: one(r, 'campaign'), lineItem: base.lineItem, lineItemType: base.lineItemType, channel: channelOf(base), creative: base.creative,
+      day, advertiser: one(r, 'advertiser'), campaign: one(r, 'campaign'), lineItem: base.lineItem, lineItemType: base.lineItemType, channel: channelOf(base), creative: base.creative,
       exchange: one(r, 'exchange'), supply: isOpenAuction(supply) ? 'Open auction' : supply, deal: !isOpenAuction(supply),
       site: one(r, 'site'), device: base.device, region: one(r, 'region'), currency: (one(r, 'currency') || fallbackCurrency).toUpperCase().slice(0, 3),
       impressions: sum(r, 'impressions'), clicks: sum(r, 'clicks'), cost: sum(r, 'cost'), viewable: sum(r, 'viewable'), measurable: sum(r, 'measurable'),
@@ -156,7 +163,10 @@ export function metrics(s: Sums): Metrics {
 export function quartiles(s: Sums): { at: string; share: number }[] | null {
   const base = s.starts || s.impressions;
   if (!base || !s.completes || !(s.q1 || s.q2 || s.q3)) return null;
-  return [['Start', base], ['25%', s.q1], ['50%', s.q2], ['75%', s.q3], ['100%', s.completes]].map(([at, v]) => ({ at: at as string, share: Math.min(1, (v as number) / base) }));
+  // a quartile the report doesn't carry (DV360 has no 25% point for audio) is left out, not drawn as zero
+  return ([['Start', base], ['25%', s.q1], ['50%', s.q2], ['75%', s.q3], ['100%', s.completes]] as [string, number][])
+    .filter(([at, v]) => at === 'Start' || at === '100%' || v > 0)
+    .map(([at, v]) => ({ at, share: Math.min(1, v / base) }));
 }
 
 // ---------------------------------------------------------------- findings
@@ -193,6 +203,12 @@ export function mediaFindings(i: FindingsInput): MediaFinding[] {
       sup.sort((a, b) => a.m.costPerQualityComplete! - b.m.costPerQualityComplete!);
       const best = sup[0]!, worst = sup[sup.length - 1]!;
       const ratio = worst.m.costPerQualityComplete! / best.m.costPerQualityComplete!;
+      if (ratio >= 1.08 && ratio < 1.4 && worst.g.sums.cost >= chCost * 0.2) {
+        const extra = worst.g.sums.cost / best.m.costPerQualityComplete! - worst.m.qualityCompletes;
+        out.push({ tone: 'info', channel: ch, title: `${label}: ${worst.g.key} costs ${Math.round((ratio - 1) * 100)}% more per completed view than ${best.g.key}`,
+          detail: `${worst.g.key} takes ${share(worst.g.sums.cost / chCost)} of ${label} spend${worst.m.completion !== null && best.m.completion !== null ? ` and completes at ${share(worst.m.completion)} against ${share(best.m.completion)}` : ''}.`,
+          action: `Shift part of that budget to ${best.g.key}: at its cost, the same money buys about ${Math.round(extra).toLocaleString('en-IN')} more completed views, as long as it can scale.` });
+      }
       if (ratio >= 1.4) {
         const extra = worst.g.sums.cost / best.m.costPerQualityComplete! - worst.m.qualityCompletes;
         out.push({ tone: 'bad', channel: ch, title: `${label}: ${worst.g.key} costs ${times(ratio)} as much per completed view as ${best.g.key}`,
@@ -268,4 +284,45 @@ export function mediaFindings(i: FindingsInput): MediaFinding[] {
   }
   const order = { bad: 0, good: 1, info: 2 } as const;
   return out.sort((a, b) => order[a.tone] - order[b.tone]);
+}
+
+// ---------------------------------------------------------------- reach and frequency
+/** A reach report: people reached per line (insertion order) per day. Reach can't be added across days or lines. */
+export const isReachReport = (cols: MediaColumns) => !!cols.reach?.length && !cols.site?.length && !cols.inventorySource?.length;
+export interface ReachRow { day: string; campaign: string; impressions: number; reach: number; cost: number }
+export function toReachRows(rows: Record<string, string>[], cols: MediaColumns): { rows: ReachRow[]; skipped: number } {
+  const one = (r: Record<string, string>, f: MediaField) => { const c = cols[f]?.[0]; return c ? String(r[c] ?? '').trim() : ''; };
+  const num = (r: Record<string, string>, f: MediaField) => { const c = cols[f]?.[0]; return c ? toNum(r[c]) : 0; };
+  const out: ReachRow[] = []; let skipped = 0;
+  for (const r of rows) {
+    const day = toDay(one(r, 'day'));
+    const campaign = one(r, 'campaign') || one(r, 'lineItem');
+    if (!day || !campaign) { skipped++; continue; }
+    out.push({ day, campaign, impressions: num(r, 'impressions'), reach: num(r, 'reach'), cost: num(r, 'cost') });
+  }
+  return { rows: out, skipped };
+}
+export interface FrequencyLine { campaign: string; channel: Channel; days: number; impressions: number; cost: number; dailyReach: number; dailyFrequency: number; maxFrequency: number }
+/** Per line: average people reached a day and how many times each saw the ad that day, over days with reach reported. */
+export function frequencyLines(rows: ReachRow[]): FrequencyLine[] {
+  const by = new Map<string, ReachRow[]>();
+  for (const r of rows) (by.get(r.campaign) ?? by.set(r.campaign, []).get(r.campaign)!).push(r);
+  return [...by.entries()].map(([campaign, rs]) => {
+    const withReach = rs.filter(r => r.reach > 0 && r.impressions > 0);
+    const freqs = withReach.map(r => r.impressions / r.reach);
+    return { campaign, channel: channelOf({ lineItem: campaign }), days: new Set(rs.map(r => r.day)).size, impressions: rs.reduce((a, r) => a + r.impressions, 0), cost: rs.reduce((a, r) => a + r.cost, 0),
+      dailyReach: withReach.length ? withReach.reduce((a, r) => a + r.reach, 0) / withReach.length : 0,
+      dailyFrequency: freqs.length ? freqs.reduce((a, b) => a + b, 0) / freqs.length : 0, maxFrequency: freqs.length ? Math.max(...freqs) : 0 };
+  }).filter(l => l.dailyReach > 0).sort((a, b) => b.cost - a.cost);
+}
+/** Lines showing the ad to the same people too often in a day. */
+export function frequencyFindings(lines: FrequencyLine[], money: (v: number) => string): MediaFinding[] {
+  const heavy = lines.filter(l => l.dailyFrequency >= 4 && l.impressions >= 10_000);
+  const out: MediaFinding[] = heavy.map(l => ({ tone: 'bad' as const, channel: l.channel,
+    title: `${l.campaign}: each person saw the ad ${l.dailyFrequency.toFixed(1)} times a day on average`,
+    detail: `About ${Math.round(l.dailyReach).toLocaleString('en-IN')} people a day were reached with ${Math.round(l.impressions / Math.max(1, l.days)).toLocaleString('en-IN')} impressions a day (${money(l.cost)} over ${l.days} days); on the worst day it was ${l.maxFrequency.toFixed(1)} times. High completion rates on such a line mostly mean the same homes watching again.`,
+    action: `Cap frequency at 2 to 3 a day${l.channel === 'ctv' ? ' per household' : ''}. With enough supply, the same spend could reach up to ${(l.dailyFrequency / 2.5).toFixed(1)}× as many people a day.` }));
+  const mid = lines.filter(l => l.dailyFrequency >= 3 && l.dailyFrequency < 4 && l.impressions >= 10_000);
+  if (mid.length) out.push({ tone: 'info', title: `${mid.length === 1 ? 'One more line shows' : `${mid.length} more lines show`} the ad 3 to 4 times a day per person`, detail: mid.map(l => `${l.campaign} (${l.dailyFrequency.toFixed(1)})`).join('; '), action: 'Watch these: past 3 a day, extra impressions mostly repeat to the same people.' });
+  return out;
 }
