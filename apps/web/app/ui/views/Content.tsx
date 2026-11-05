@@ -189,6 +189,16 @@ function CheckSummary({ videos }: { videos: Video[] }) {
     const t = tally.get(c.id) ?? { label: c.label, fix: c.fix, failed: 0, total: 0 };
     t.total++; if (!c.pass) t.failed++; tally.set(c.id, t);
   }
+  const GENERIC: Record<string, string> = {
+    title_length: 'Keep titles between 20 and 70 characters, hashtags aside, and say what the viewer gets.',
+    topic: 'Use the words people search for (see Topics above) in the title.',
+    link: 'Put a link to the relevant page on your site in the first two lines of every description.',
+    utm: 'Tag those links with utm_source=youtube&utm_medium=organic&utm_campaign=<video>, so leads from each video can be counted.',
+    hashtags: 'Three to five specific hashtags (model, brand, topic); drop generic ones such as #viral and #fyp.',
+    chapters: 'Add chapters to long videos: timestamps from 0:00 in the description.',
+    retention: 'Open the retention curve of these videos to see where viewers leave, and tighten the opening.',
+  };
+  for (const [id, t] of tally) t.fix = GENERIC[id] ?? t.fix;
   const rows = [...tally.values()].filter(t => t.failed).sort((a, b) => b.failed / b.total - a.failed / a.total);
   if (!rows.length) return <div className="note-box" style={{ marginBottom: 12 }}>Every video passes every check.</div>;
   return (

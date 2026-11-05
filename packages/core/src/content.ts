@@ -123,24 +123,26 @@ export const DEFAULT_TOPICS: Record<Industry, string[]> = {
 export interface VideoCheck { id: string; label: string; pass: boolean; fix: string }
 
 /** The basics a YouTube video needs to be found and watched, read from its title, description and numbers. */
-export function videoChecks(v: { title: string; description: string; durationS: number | null; avgViewPct: number | null; format: string }, ctx: { topics: string[]; usualViewPct: number | null; brandDomains: string[] }): VideoCheck[] {
-  const t = v.title.trim(), d = v.description ?? '';
+export function videoChecks(v: { title: string; description: string; durationS: number | null; avgViewPct: number | null; format: string; views?: number | null }, ctx: { topics: string[]; usualViewPct: number | null; brandDomains: string[] }): VideoCheck[] {
+  const d = v.description ?? '';
+  // hashtags in a title (usual on Shorts) don't count towards what reads in search
+  const t = v.title.replace(/#[\p{L}\d_]+/gu, '').replace(/\s+/g, ' ').trim();
   const words = (s: string) => s.toLowerCase().split(/[^a-z0-9₹]+/).filter(w => w.length > 2);
   const titleWords = new Set(words(t));
   const topicHit = ctx.topics.find(tp => { const w = words(tp).filter(x => !['best', 'india', 'under', 'the', 'and', 'for'].includes(x)); return w.length && w.filter(x => titleWords.has(x)).length >= Math.min(2, w.length); });
   const links = d.match(/https?:\/\/\S+/g) ?? [];
   const brandLinks = ctx.brandDomains.length ? links.filter(l => ctx.brandDomains.some(dm => l.includes(dm))) : links;
   const stamps = (d.match(/(^|\n)\s*\(?\d{1,2}:\d{2}(:\d{2})?\)?\s/g) ?? []).length;
-  const hashtags = (d.match(/#[\p{L}\d_]+/gu) ?? []).length;
+  const hashtags = (`${v.title} ${d}`.match(/#[\p{L}\d_]+/gu) ?? []).length;
   const long = (v.durationS ?? 0) > 180;
   const checks: VideoCheck[] = [
-    { id: 'title_length', label: 'Title fits in search results', pass: t.length >= 20 && t.length <= 70, fix: t.length > 70 ? `Shorten the title to under 70 characters (it is ${t.length}); the end gets cut off in search and suggestions.` : 'Make the title more descriptive: say what the viewer gets.' },
+    { id: 'title_length', label: 'Title fits in search results', pass: t.length >= 20 && t.length <= 70, fix: t.length > 70 ? `Shorten the title to under 70 characters (it is ${t.length}, hashtags aside); the end gets cut off in search and suggestions.` : `Make the title say what the viewer gets, in 20 to 70 characters (it is ${t.length}, hashtags aside).` },
     { id: 'topic', label: 'Title uses words people search', pass: !ctx.topics.length || !!topicHit, fix: ctx.topics.length ? `Work a tracked search phrase into the title, for example "${ctx.topics[0]}".` : '' },
     { id: 'link', label: 'Description links to the brand site', pass: brandLinks.length > 0, fix: 'Add a link to the relevant page in the first two lines of the description.' },
     { id: 'utm', label: 'That link is tagged for tracking', pass: brandLinks.some(l => /[?&]utm_/.test(l)), fix: 'Add utm_source=youtube&utm_medium=organic&utm_campaign=<video> to the link, so leads from this video can be counted.' },
-    { id: 'hashtags', label: 'One to three hashtags', pass: hashtags >= 1 && hashtags <= 3, fix: hashtags > 3 ? 'Keep to three hashtags; YouTube shows the first three above the title, and many look like spam.' : 'Add one to three relevant hashtags to the description.' },
+    { id: 'hashtags', label: 'A few relevant hashtags', pass: hashtags >= 1 && hashtags <= 5, fix: hashtags > 5 ? `Use three to five specific hashtags (the model, the brand, the topic) instead of ${hashtags}; generic ones such as #viral or #fyp don't help people find the video.` : 'Add three to five specific hashtags: the model, the brand, the topic.' },
   ];
   if (long) checks.push({ id: 'chapters', label: 'Chapters for a long video', pass: stamps >= 3, fix: 'Add chapters: timestamps in the description starting at 0:00, at least three. They help viewers jump to what they came for and appear in search.' });
-  if (v.avgViewPct !== null && ctx.usualViewPct) checks.push({ id: 'retention', label: 'Viewers stay as long as usual', pass: v.avgViewPct >= ctx.usualViewPct * 0.8, fix: `Viewers watch ${Math.round(v.avgViewPct)}% on average against your usual ${Math.round(ctx.usualViewPct)}%. Open the retention curve to see where they leave, and tighten the opening.` });
+  if (v.avgViewPct !== null && ctx.usualViewPct && (v.views ?? 0) >= 100) checks.push({ id: 'retention', label: 'Viewers stay as long as usual', pass: v.avgViewPct >= ctx.usualViewPct * 0.8, fix: `Viewers watch ${Math.round(v.avgViewPct)}% on average against your usual ${Math.round(ctx.usualViewPct)}%. Open the retention curve to see where they leave, and tighten the opening.` });
   return checks.filter(c => c.fix || c.pass);
 }

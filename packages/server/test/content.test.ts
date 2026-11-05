@@ -45,7 +45,7 @@ describe('content analysis', () => {
     expect(crowded.biggerChannels).toBe(1);
   });
   it('checks a video and says how to fix it', () => {
-    const c = videoChecks({ title: 'Our new SUV is here and you will absolutely love everything about it, watch till the end', description: 'Book now https://compareauto.in/hyryder #suv #cars #india #new\n0:00 Intro\n1:10 Design\n4:00 Price', durationS: 600, avgViewPct: 20, format: 'video' },
+    const c = videoChecks({ title: 'Our new SUV is here and you will absolutely love everything about it, watch till the end', description: 'Book now https://compareauto.in/hyryder #suv #cars #india #new #car #auto #drive\n0:00 Intro\n1:10 Design\n4:00 Price', durationS: 600, avgViewPct: 20, format: 'video', views: 5000 },
       { topics: ['best suv under 15 lakh'], usualViewPct: 40, brandDomains: ['compareauto.in'] });
     const by = Object.fromEntries(c.map(x => [x.id, x.pass]));
     expect(by).toMatchObject({ title_length: false, topic: false, link: true, utm: false, hashtags: false, chapters: true, retention: false });

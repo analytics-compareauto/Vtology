@@ -62,7 +62,7 @@ export async function contentOverview(deps: Deps, ctx: Ctx, range: { from: strin
   const phrases = topics.map(t => t.phrase);
   const videos = ownVideos.filter(v => new Date(v.posted_at) >= win.from && new Date(v.posted_at) <= win.to).slice(0, 40).map(v => {
     const [title, ...rest] = (v.caption ?? '').split('\n');
-    const checks = videoChecks({ title: title ?? '', description: rest.join('\n'), durationS: v.duration_s, avgViewPct: num(v.avg_view_pct), format: v.format }, { topics: phrases, usualViewPct, brandDomains });
+    const checks = videoChecks({ title: title ?? '', description: rest.join('\n'), durationS: v.duration_s, avgViewPct: num(v.avg_view_pct), format: v.format, views: num(v.views) }, { topics: phrases, usualViewPct, brandDomains });
     return { id: v.id, title, postedAt: v.posted_at, permalink: v.permalink, thumbnailUrl: v.thumbnail_url, format: v.format, views: num(v.views), avgViewPct: num(v.avg_view_pct), durationS: v.duration_s, hasRetention: !!v.retention_at, checks, score: checks.length ? checks.filter(c => c.pass).length / checks.length : null };
   });
   const conn = await sql.query<{ scopes: string[] }>(`select scopes from vt.social_connections where tenant_id = $1 and provider = 'youtube'`, [ctx.tenantId]);
