@@ -156,7 +156,7 @@ function Topics({ T, d, busy, onScan, onAdd, onRemove }: { T: string; d: Data; b
               return [
                 <tr key={t.id}>
                   <td><button className="btn link" style={{ padding: 0, fontWeight: 650, textAlign: 'left' }} onClick={() => setOpen(open === t.id ? null : t.id)}>{t.phrase}</button>{t.last_error && <div className="small" style={{ color: 'var(--warn)' }}>{t.last_error}</div>}{!r && !t.last_error && <div className="small muted">Not searched yet</div>}</td>
-                  <td>{r && <div className="aud-index"><i style={{ width: `${r.opportunity}%`, background: r.opportunity >= 60 ? 'var(--ok)' : r.opportunity >= 35 ? 'var(--flow)' : 'var(--muted)' }} /><span>{r.opportunity}</span></div>}</td>
+                  <td>{r && <div className="aud-index score"><i style={{ width: `${r.opportunity}%`, background: r.opportunity >= 60 ? 'var(--ok)' : r.opportunity >= 35 ? 'var(--flow)' : 'var(--muted)' }} /><span>{r.opportunity}</span></div>}</td>
                   <td className="num">{r ? compact(r.demand) : '–'}</td>
                   <td className="num">{r ? (r.medianAgeDays >= 60 ? `${Math.round(r.medianAgeDays / 30)} months` : `${r.medianAgeDays} days`) : '–'}</td>
                   <td className="num">{r?.nearSize != null ? `${Math.round(r.nearSize * 10)} of 10` : r?.biggerChannels != null ? `${10 - Math.round(r.biggerChannels * 10)} of 10` : '–'}</td>
