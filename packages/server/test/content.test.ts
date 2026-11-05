@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { handle, encrypt, type Db } from '@vtology/server';
-import { findOutliers, scoreTopic, videoChecks, type SocialPost } from '@vtology/core';
+import { aboutTopic, findOutliers, scoreTopic, videoChecks, type SocialPost } from '@vtology/core';
 import { createTestDb } from './helpers/pglite';
 
 const LOCAL = 'local-secret-for-tests-at-least-32-chars';
@@ -45,6 +45,11 @@ describe('content analysis', () => {
     expect(old.opportunity).toBeGreaterThan(crowded.opportunity);
     expect(crowded.biggerChannels).toBe(1);
   });
+  it('tells which posts are about a search topic', () => {
+    expect(aboutTopic('best mileage car india', 'Top 5 cars with the best #mileage in India')).toBe(true);
+    expect(aboutTopic('car loan emi', 'How to plan your EMI before a car purchase')).toBe(true);
+    expect(aboutTopic('ev range test india', 'New EV launch!')).toBe(false);
+  });
   it('checks a video and says how to fix it', () => {
     const c = videoChecks({ title: 'Our new SUV is here and you will absolutely love everything about it, watch till the end', description: 'Book now https://compareauto.in/hyryder #suv #cars #india #new #car #auto #drive\n0:00 Intro\n1:10 Design\n4:00 Price', durationS: 600, avgViewPct: 20, format: 'video', views: 5000 },
       { topics: ['best suv under 15 lakh'], usualViewPct: 40, brandDomains: ['compareauto.in'] });
@@ -66,6 +71,8 @@ describe('content tab', () => {
     expect((await call(token, 'POST', `${T}/content/topics/scan`, {})).body).toMatchObject({ scanned: 3, sample: true });
     const after = (await call(token, 'GET', `${T}/content`)).body;
     expect(after.topics[0].result.opportunity).toBeGreaterThanOrEqual(0);
+    expect(Object.keys(after.instagram)).toHaveLength(3);
+    expect(after.instagram[after.topics[0].id].length).toBeGreaterThan(1);
     const v = after.videos[0];
     expect(v.checks.length).toBeGreaterThan(3);
     expect((await call(token, 'GET', `${T}/content/videos/${v.id}/retention`)).body.curve).toHaveLength(21);

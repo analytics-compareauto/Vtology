@@ -123,6 +123,19 @@ export const DEFAULT_TOPICS: Record<Industry, string[]> = {
   FMCG: ['healthy breakfast ideas', 'skincare routine india', 'best shampoo for hair fall', 'easy dinner recipes', 'protein snacks india', 'diwali gift ideas'],
 };
 
+/** The words of a search phrase that carry its meaning (generic ones like "best" and "india" dropped). */
+export function topicWords(phrase: string): string[] {
+  const stop = new Set(['best', 'india', 'indian', 'under', 'the', 'and', 'for', 'top', 'with', 'how', 'what', 'which', 'vs', 'new', 'all', 'you', 'your']);
+  return [...new Set(phrase.toLowerCase().split(/[^a-z0-9₹]+/).filter(w => w.length > 2 && !stop.has(w)))];
+}
+/** A caption is about a topic when it carries most of the topic's words (two, or all when there are fewer). */
+export function aboutTopic(phrase: string, caption: string | null): boolean {
+  const w = topicWords(phrase);
+  if (!w.length || !caption) return false;
+  const text = ` ${caption.toLowerCase().replace(/#/g, ' ').replace(/[^a-z0-9₹]+/g, ' ')} `;
+  return w.filter(x => text.includes(` ${x} `) || text.includes(` ${x}s `)).length >= Math.min(2, w.length);
+}
+
 // ---------------------------------------------------------------- video checks
 export interface VideoCheck { id: string; label: string; pass: boolean; fix: string }
 

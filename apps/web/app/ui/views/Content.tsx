@@ -6,14 +6,15 @@ import { DateRangePicker, rangeQuery, type Range } from '../DateRange';
 import { ago, compact, pct } from '../format';
 import { IconImage, IconPlay, IconRefresh } from '../icons';
 
-interface Acc { id: string; platform: string; name: string; handle: string | null; followers: number | null; isCompetitor: boolean; profileUrl: string | null }
+interface Acc { id: string; platform: string; name: string; handle: string | null; followers: number | null; isCompetitor: boolean; profileUrl: string | null; externalId: string }
+interface IgTopic { accountId: string; posts: number; median: number | null; usual: number | null; best: { title: string; permalink: string | null; value: number } | null }
 interface Out { id: string; accountId: string; platform: string; format: string; title: string; postedAt: string; permalink: string | null; thumbnailUrl: string | null; score: number; value: number; metric: string; usual: number; ageDays: number; themes: string[] }
 interface Pattern { kind: string; key: string; label: string; outliers: number; posts: number; outlierShare: number; postShare: number; ratio: number; byCompetitors: number }
 interface TopicVideo { id: string; title: string; channel: string; channelId: string; publishedAt: string; views: number }
 interface Topic { id: string; phrase: string; last_scan_at: string | null; last_error: string | null; result: { demand: number; medianAgeDays: number; biggerChannels: number | null; nearSize?: number | null; ownRank: number | null; competitorRanks: { name: string; rank: number }[]; opportunity: number; videos: TopicVideo[] } | null }
 interface Check { id: string; label: string; pass: boolean; fix: string }
 interface Video { id: string; title: string; postedAt: string; permalink: string | null; thumbnailUrl: string | null; format: string; views: number | null; avgViewPct: number | null; durationS: number | null; checks: Check[]; score: number | null }
-interface Data { canEdit: boolean; isDemo: boolean; youtubeConnected: boolean; accounts: Acc[]; outliers: Out[]; patterns: Pattern[]; topics: Topic[]; suggestedTopics: string[]; brandDomain: string | null; usualViewPct: number | null; videos: Video[] }
+interface Data { canEdit: boolean; isDemo: boolean; youtubeConnected: boolean; accounts: Acc[]; outliers: Out[]; patterns: Pattern[]; instagram: Record<string, IgTopic[]>; topics: Topic[]; suggestedTopics: string[]; brandDomain: string | null; usualViewPct: number | null; videos: Video[] }
 
 const PLATFORM: Record<string, string> = { instagram: 'Instagram', youtube: 'YouTube', facebook: 'Facebook' };
 const COLOR: Record<string, string> = { instagram: '#c13584', youtube: '#e62117', facebook: '#1877f2' };
@@ -65,23 +66,23 @@ export function Content({ workspaceId, notify, range, onRange }: { workspaceId: 
       </div>
 
       <section className="panel">
-        <div className="panel-head"><div><h2>Breaking out</h2><p>Posts that did at least 2.5× their own account’s usual, judged on what each platform shows publicly (YouTube views; Instagram and Facebook likes and comments), so your posts and competitors’ compare fairly. Posts need two days to count.</p></div></div>
+        <div className="panel-head"><div><h2>Standout posts</h2><p>Posts that got at least 2.5 times what the same account usually gets: views on YouTube, likes and comments on Instagram and Facebook (the numbers each platform shows publicly, so your posts and competitors’ compare fairly). The badge shows how many times the usual. Posts count once they are two days old.</p></div></div>
         {outs.length ? <div className="posts">{outs.slice(0, 16).map(o => <OutCard key={o.id} o={o} a={acc.get(o.accountId)} />)}</div>
-          : <div className="empty">{competitors.length ? 'Nothing broke out in these dates. Try a longer range.' : 'Add competitors on the Growth tab to see what breaks out across your category.'}</div>}
+          : <div className="empty">{competitors.length ? 'No post stood out in these dates. Try a longer range.' : 'Add competitors on the Growth tab to see standout posts across your category.'}</div>}
       </section>
 
       {d.patterns.length > 0 && (
         <section className="panel">
-          <div className="panel-head"><div><h2>What breaks out in your category</h2><p>Themes and formats that show up among breakout posts more often than they are posted, across you and your competitors.</p></div></div>
+          <div className="panel-head"><div><h2>What kind of posts stand out in your category</h2><p>Themes and formats that are a bigger share of standout posts than of all posts, across you and your competitors: the kinds of posts most likely to do far better than usual.</p></div></div>
           <div className="rows">
             {d.patterns.map(p => (
               <div className="row" key={`${p.kind}:${p.key}`}>
-                <div className="row-main"><span><b>{p.label}</b> <span className="tag plain">{p.kind === 'theme' ? 'Theme' : 'Format'}</span></span><b>{p.ratio.toFixed(1)}× as likely to break out</b></div>
+                <div className="row-main"><span><b>{p.label}</b> <span className="tag plain">{p.kind === 'theme' ? 'Theme' : 'Format'}</span></span><b>{p.ratio.toFixed(1)}× as likely to stand out</b></div>
                 <div className="aud-compare" style={{ maxWidth: 640, gridTemplateColumns: '150px minmax(0, 1fr) 48px' }}>
-                  <span className="small">Share of breakouts</span><div className="share-bar"><i style={{ width: `${p.outlierShare * 100}%` }} /></div><b>{pct(p.outlierShare)}</b>
+                  <span className="small">Share of standout posts</span><div className="share-bar"><i style={{ width: `${p.outlierShare * 100}%` }} /></div><b>{pct(p.outlierShare)}</b>
                   <span className="small">Share of all posts</span><div className="share-bar"><i style={{ width: `${p.postShare * 100}%`, background: 'var(--muted)' }} /></div><b>{pct(p.postShare)}</b>
                 </div>
-                <span className="small muted">{p.outliers} breakout {p.outliers === 1 ? 'post' : 'posts'}, {p.byCompetitors} of them by competitors.</span>
+                <span className="small muted">{p.outliers} standout {p.outliers === 1 ? 'post' : 'posts'}, {p.byCompetitors} of them by competitors.</span>
               </div>
             ))}
           </div>
@@ -108,7 +109,7 @@ function OutCard({ o, a }: { o: Out; a: Acc | undefined }) {
       <div className="thumb">
         {o.thumbnailUrl && !broken ? <img src={o.thumbnailUrl} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)} />
           : <div className="ph" style={{ background: `linear-gradient(135deg, ${COLOR[o.platform] ?? '#2f5bd8'}, #131a33)` }}><Fmt /></div>}
-        <span className="badge up">{o.score >= 10 ? Math.round(o.score) : o.score.toFixed(1)}×</span>
+        <span className="badge up">{o.score >= 10 ? Math.round(o.score) : o.score.toFixed(1)}× usual</span>
       </div>
       <div className="body">
         <span className="small" style={{ fontWeight: 650 }}>{a?.name ?? 'Account'}{a?.isCompetitor ? '' : ' (you)'} · {PLATFORM[o.platform] ?? o.platform}</span>
@@ -123,17 +124,25 @@ function OutCard({ o, a }: { o: Out; a: Acc | undefined }) {
 function Topics({ T, d, busy, onScan, onAdd, onRemove }: { T: string; d: Data; busy: boolean; onScan: (ids?: string[]) => void; onAdd: (p: string[]) => void; onRemove: (id: string) => void }) {
   const [q, setQ] = useState('');
   const [sug, setSug] = useState<string[]>([]);
-  const [open, setOpen] = useState<string | null>(null);
+  const [sel, setSel] = useState<string | null>(null);
   useEffect(() => {
     if (q.trim().length < 3) { setSug([]); return; }
     const t = setTimeout(() => api<{ suggestions: string[] }>('GET', `${T}/content/topics/suggest?q=${encodeURIComponent(q)}`).then(r => setSug(r.suggestions)).catch(() => setSug([])), 350);
     return () => clearTimeout(t);
   }, [q, T]);
   const sorted = [...d.topics].sort((a, b) => (b.result?.opportunity ?? -1) - (a.result?.opportunity ?? -1));
+  const ownYt = d.accounts.filter(a => a.platform === 'youtube' && !a.isCompetitor);
+  const compYt = d.accounts.filter(a => a.platform === 'youtube' && a.isCompetitor);
+  const rankIn = (t: Topic, ids: string[]) => { const i = t.result?.videos.findIndex(v => ids.includes(v.channelId)) ?? -1; return i >= 0 ? i + 1 : null; };
+  const current = sorted.find(t => t.id === sel) ?? sorted.find(t => t.result) ?? null;
+  const age = (iso: string) => Math.max(1, (Date.now() - Date.parse(iso)) / 86_400_000);
+  const ageText = (days: number) => (days >= 365 ? `${(days / 365).toFixed(1)} yr` : days >= 60 ? `${Math.round(days / 30)} mo` : `${Math.round(days)} d`);
+  const RankCell = ({ r }: { r: number | null }) => (r ? <span className={`tag ${r <= 5 ? 'ok' : r <= 10 ? 'flow' : 'plain'}`}>#{r}</span> : <span className="muted">–</span>);
+
   return (
     <section className="panel">
       <div className="panel-head">
-        <div><h2>Topics people search on YouTube</h2><p>For each phrase: how much the top 10 videos get watched a day, how old they are, how many come from channels near your size, and where you and competitors rank. Old results, and channels like yours already ranking, leave room for a new video. Searched weekly.</p></div>
+        <div><h2>What people search on YouTube, and who shows up</h2><p>For each search phrase you track: the top 20 videos YouTube shows, how many views a day they get, and where you and each competitor rank. Searched again every week.</p></div>
         {d.canEdit && d.topics.length > 0 && <button className="btn" onClick={() => onScan(d.topics.map(t => t.id).slice(0, 10))} disabled={busy || !d.youtubeConnected}><IconRefresh />{busy ? 'Searching…' : 'Search again'}</button>}
       </div>
       {!d.youtubeConnected && <div className="note-box" style={{ marginBottom: 12 }}>Connect your YouTube channel on the Social tab: topics are searched through it.</div>}
@@ -141,42 +150,108 @@ function Topics({ T, d, busy, onScan, onAdd, onRemove }: { T: string; d: Data; b
         <div style={{ display: 'grid', gap: 8, marginBottom: 14 }}>
           <form className="toolbar" onSubmit={e => { e.preventDefault(); if (q.trim()) { onAdd([q.trim()]); setQ(''); setSug([]); } }}>
             <input className="input" style={{ maxWidth: 360 }} value={q} onChange={e => setQ(e.target.value)} placeholder="A phrase people search, e.g. hyryder vs grand vitara" maxLength={80} />
-            <button className="btn primary" type="submit" disabled={!q.trim()}>Track topic</button>
+            <button className="btn primary" type="submit" disabled={!q.trim()}>Track this search</button>
           </form>
-          {sug.length > 0 && <div className="toolbar" style={{ gap: 6 }}><span className="small muted">YouTube suggests:</span>{sug.map(s => <button key={s} className="tag flow" style={{ border: 0, cursor: 'pointer' }} onClick={() => { onAdd([s]); setQ(''); setSug([]); }}>+ {s}</button>)}</div>}
+          {sug.length > 0 && <div className="toolbar" style={{ gap: 6 }}><span className="small muted">People also search:</span>{sug.map(s => <button key={s} className="tag flow" style={{ border: 0, cursor: 'pointer' }} onClick={() => { onAdd([s]); setQ(''); setSug([]); }}>+ {s}</button>)}</div>}
           {d.suggestedTopics.length > 0 && <div className="toolbar" style={{ gap: 6 }}><span className="small muted">Start with:</span>{d.suggestedTopics.map(s => <span key={s} className="tag plain">{s}</span>)}<button className="btn small" onClick={() => onAdd(d.suggestedTopics)}>Track all of these</button></div>}
         </div>
       )}
+
       {sorted.length > 0 && (
-        <div className="table-wrap" style={{ boxShadow: 'none' }}>
-          <table>
-            <thead><tr><th>Topic</th><th style={{ width: 160 }}>Opportunity</th><th className="num">Daily views, top 10</th><th className="num">Typical age</th><th className="num">Channels near your size</th><th>You</th><th>Competitors</th><th /></tr></thead>
-            <tbody>{sorted.map(t => {
-              const r = t.result;
-              return [
-                <tr key={t.id}>
-                  <td><button className="btn link" style={{ padding: 0, fontWeight: 650, textAlign: 'left' }} onClick={() => setOpen(open === t.id ? null : t.id)}>{t.phrase}</button>{t.last_error && <div className="small" style={{ color: 'var(--warn)' }}>{t.last_error}</div>}{!r && !t.last_error && <div className="small muted">Not searched yet</div>}</td>
-                  <td>{r && <div className="aud-index score"><i style={{ width: `${r.opportunity}%`, background: r.opportunity >= 60 ? 'var(--ok)' : r.opportunity >= 35 ? 'var(--flow)' : 'var(--muted)' }} /><span>{r.opportunity}</span></div>}</td>
-                  <td className="num">{r ? compact(r.demand) : '–'}</td>
-                  <td className="num">{r ? (r.medianAgeDays >= 60 ? `${Math.round(r.medianAgeDays / 30)} months` : `${r.medianAgeDays} days`) : '–'}</td>
-                  <td className="num">{r?.nearSize != null ? `${Math.round(r.nearSize * 10)} of 10` : r?.biggerChannels != null ? `${10 - Math.round(r.biggerChannels * 10)} of 10` : '–'}</td>
-                  <td>{r ? (r.ownRank ? <span className="tag ok">#{r.ownRank}</span> : <span className="tag plain">not in top 20</span>) : ''}</td>
-                  <td className="small">{r?.competitorRanks.length ? r.competitorRanks.map(c => `${c.name} #${c.rank}`).join(', ') : r ? 'none in top 20' : ''}</td>
-                  <td>{d.canEdit && <button className="btn small link" onClick={() => onRemove(t.id)}>Remove</button>}</td>
-                </tr>,
-                open === t.id && r && (
-                  <tr key={`${t.id}-v`}><td colSpan={8} style={{ background: 'var(--surface-2)' }}>
-                    <b className="small">Top results{t.last_scan_at ? `, searched ${ago(t.last_scan_at)}` : ''}</b>
-                    <ol className="small" style={{ margin: '6px 0 0', paddingLeft: 20, display: 'grid', gap: 3 }}>
-                      {r.videos.slice(0, 10).map(v => <li key={v.id}><a href={`https://youtube.com/watch?v=${v.id}`} target="_blank" rel="noreferrer">{v.title}</a> <span className="muted">· {v.channel} · {compact(v.views)} views · {new Date(v.publishedAt).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}</span></li>)}
-                    </ol>
-                  </td></tr>
-                ),
-              ];
-            })}</tbody>
-          </table>
-        </div>
+        <>
+          <b className="small">Who ranks where: best position in the top 20, per search</b>
+          <div className="table-wrap" style={{ boxShadow: 'none', margin: '8px 0 18px' }}>
+            <table>
+              <thead><tr>
+                <th>Search phrase</th>
+                <th style={{ width: 130 }} title="0 to 100: how much people watch this search, how old the top videos are, and whether channels your size already rank">Chance to rank</th>
+                <th className="num">Views a day, top 10</th>
+                <th className="num">You</th>
+                {compYt.map(c => <th key={c.id} className="num">{c.name}</th>)}
+                <th>No. 1 today</th><th />
+              </tr></thead>
+              <tbody>{sorted.map(t => {
+                const r = t.result;
+                return (
+                  <tr key={t.id} style={{ cursor: 'pointer', background: current?.id === t.id ? 'var(--flow-soft)' : undefined }} onClick={() => setSel(t.id)}>
+                    <td><b>{t.phrase}</b>{t.last_error && <div className="small" style={{ color: 'var(--warn)' }}>{t.last_error}</div>}{!r && !t.last_error && <div className="small muted">Not searched yet</div>}</td>
+                    <td>{r && <div className="aud-index score"><i style={{ width: `${r.opportunity}%`, background: r.opportunity >= 75 ? 'var(--ok)' : r.opportunity >= 60 ? 'var(--flow)' : 'var(--muted)' }} /><span>{r.opportunity}</span></div>}</td>
+                    <td className="num">{r ? compact(r.demand) : '–'}</td>
+                    <td className="num">{r ? <RankCell r={rankIn(t, ownYt.map(a => a.externalId))} /> : ''}</td>
+                    {compYt.map(c => <td key={c.id} className="num">{r ? <RankCell r={rankIn(t, [c.externalId])} /> : ''}</td>)}
+                    <td className="small">{r?.videos[0]?.channel ?? ''}</td>
+                    <td>{d.canEdit && <button className="btn small link" onClick={e => { e.stopPropagation(); onRemove(t.id); }}>Remove</button>}</td>
+                  </tr>
+                );
+              })}</tbody>
+            </table>
+          </div>
+          <p className="small muted" style={{ marginTop: -10 }}>Chance to rank (0 to 100) is higher when many people watch the search, the top videos are old, and channels near your size already appear. Click a row to see its top 20.</p>
+        </>
       )}
+
+      {current?.result && (() => {
+        const r = current.result!;
+        const vids = r.videos.slice(0, 20);
+        const perDay = vids.map(v => v.views / age(v.publishedAt));
+        const sortedPerDay = [...perDay].sort((a, b) => a - b);
+        const entry = sortedPerDay[Math.floor(sortedPerDay.length / 4)] ?? 0;
+        const who = (channelId: string) => ownYt.some(a => a.externalId === channelId) ? 'you' : compYt.find(c => c.externalId === channelId)?.name ?? null;
+        const ig = d.instagram[current.id] ?? [];
+        const accName = (id: string) => d.accounts.find(a => a.id === id);
+        return (
+          <div className="topic-detail">
+            <div>
+              <h3 style={{ margin: '0 0 4px' }}>“{current.phrase}” on YouTube: the top {vids.length}</h3>
+              <p className="small muted" style={{ margin: '0 0 10px' }}>
+                {rankIn(current, ownYt.map(a => a.externalId)) ? `You rank #${rankIn(current, ownYt.map(a => a.externalId))}. ` : 'You are not in the top 20. '}
+                Most videos here get at least {compact(entry)} views a day; channels near your size hold {r.nearSize != null ? `${Math.round(r.nearSize * 10)} of the top 10` : 'an unknown share'}; the top 10 are typically {ageText(r.medianAgeDays)} old.
+                {current.last_scan_at ? ` Searched ${ago(current.last_scan_at)}.` : ''}
+              </p>
+              <div className="table-wrap" style={{ boxShadow: 'none' }}>
+                <table>
+                  <thead><tr><th className="num">#</th><th>Video</th><th>Channel</th><th className="num">Views</th><th className="num">Views a day</th><th className="num">Age</th></tr></thead>
+                  <tbody>{vids.map((v, i) => {
+                    const w = who(v.channelId);
+                    return (
+                      <tr key={v.id} style={{ background: w === 'you' ? 'var(--ok-soft)' : w ? 'var(--warn-soft)' : undefined }}>
+                        <td className="num">{i + 1}</td>
+                        <td><a href={`https://youtube.com/watch?v=${v.id}`} target="_blank" rel="noreferrer">{v.title}</a></td>
+                        <td className="small">{v.channel}{w && <span className={`tag ${w === 'you' ? 'ok' : 'warn'}`} style={{ marginLeft: 6 }}>{w === 'you' ? 'You' : 'Competitor'}</span>}</td>
+                        <td className="num">{compact(v.views)}</td>
+                        <td className="num">{compact(perDay[i]!)}</td>
+                        <td className="num">{ageText(age(v.publishedAt))}</td>
+                      </tr>
+                    );
+                  })}</tbody>
+                </table>
+              </div>
+            </div>
+            <div>
+              <h3 style={{ margin: '0 0 4px' }}>The same topic on Instagram</h3>
+              <p className="small muted" style={{ margin: '0 0 10px' }}>Instagram has no search data for outside tools, so this compares the posts about “{current.phrase}” that you and your competitors made in the last 180 days.</p>
+              {ig.length ? (
+                <div className="table-wrap" style={{ boxShadow: 'none' }}>
+                  <table>
+                    <thead><tr><th>Account</th><th className="num">Posts</th><th className="num">Typical likes + comments</th><th className="num">vs their usual</th></tr></thead>
+                    <tbody>{ig.map(x => {
+                      const a = accName(x.accountId);
+                      return (
+                        <tr key={x.accountId}>
+                          <td><b>{a?.name ?? 'Account'}</b>{a && !a.isCompetitor && <span className="tag ok" style={{ marginLeft: 6 }}>You</span>}{x.best && <div className="small">{x.best.permalink ? <a href={x.best.permalink} target="_blank" rel="noreferrer">Best: {x.best.title || 'post'}</a> : `Best: ${x.best.title}`}</div>}</td>
+                          <td className="num">{x.posts || <span className="muted">none</span>}</td>
+                          <td className="num">{x.median !== null ? compact(x.median) : '–'}</td>
+                          <td className="num">{x.median !== null && x.usual ? <b style={{ color: x.median >= x.usual ? 'var(--ok)' : 'var(--leak)' }}>{(x.median / x.usual).toFixed(1)}×</b> : '–'}</td>
+                        </tr>
+                      );
+                    })}</tbody>
+                  </table>
+                </div>
+              ) : <div className="empty">Connect Instagram and add competitors on the Growth tab to compare this topic there.</div>}
+            </div>
+          </div>
+        );
+      })()}
       {d.isDemo && d.topics.some(t => t.result) && <p className="small muted" style={{ marginTop: 8 }}>Sample workspace: search results are made up.</p>}
     </section>
   );

@@ -546,3 +546,6 @@ table.bench tr.you td:first-child { box-shadow: inset 3px 0 0 var(--flow); }
 .aud-index::after { content: ''; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px; background: var(--ink); opacity: 0.5; }
 .aud-index span { position: absolute; right: 6px; top: 0; font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; font-weight: 650; }
 .aud-index.score::after { display: none; }
+.topic-detail { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 20px; padding-top: 16px; border-top: 1px solid var(--line-soft); }
+.topic-detail h3 { font-size: 16px; }
+@media (max-width: 1100px) { .topic-detail { grid-template-columns: 1fr; } }

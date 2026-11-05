@@ -3,7 +3,7 @@
  * demand, video checks and retention curves. Built on the posts the social sync already stores, plus
  * YouTube search and analytics through the brand's own connected account.
  */
-import { DEFAULT_TOPICS, findOutliers, outlierPatterns, scoreTopic, videoChecks, type ContentAccount, type SocialPost, type TopicResult, type TopicVideo } from '@vtology/core';
+import { DEFAULT_TOPICS, aboutTopic, outlierMetric, findOutliers, outlierPatterns, scoreTopic, videoChecks, type ContentAccount, type SocialPost, type TopicResult, type TopicVideo } from '@vtology/core';
 import { HttpError, requireRole, type Ctx, type Deps } from './context';
 import { refreshSampleSocial } from './demo';
 import { youtubeToken } from './social';
@@ -65,13 +65,24 @@ export async function contentOverview(deps: Deps, ctx: Ctx, range: { from: strin
     const checks = videoChecks({ title: title ?? '', description: rest.join('\n'), durationS: v.duration_s, avgViewPct: num(v.avg_view_pct), format: v.format, views: num(v.views) }, { topics: phrases, usualViewPct, brandDomains });
     return { id: v.id, title, postedAt: v.posted_at, permalink: v.permalink, thumbnailUrl: v.thumbnail_url, format: v.format, views: num(v.views), avgViewPct: num(v.avg_view_pct), durationS: v.duration_s, hasRetention: !!v.retention_at, checks, score: checks.length ? checks.filter(c => c.pass).length / checks.length : null };
   });
+  // the same topics on Instagram (no keyword search there): how posts about each topic did for every tracked account
+  const median = (xs: number[]) => { const v = [...xs].sort((a, b) => a - b); return v.length ? v[Math.floor(v.length / 2)]! : 0; };
+  const igAccounts = accountsRaw.filter(a => a.platform === 'instagram');
+  const since = ctx.now.getTime() - 180 * 86_400_000;
+  const igPosts = posts.filter(p => p.platform === 'instagram' && p.postedAt.getTime() >= since);
+  const usualOf = new Map(igAccounts.map(a => [a.id, median(igPosts.filter(p => p.accountId === a.id).map(p => outlierMetric(p)?.value ?? 0).filter(Boolean))]));
+  const instagram = Object.fromEntries(topics.map(t => [t.id, igAccounts.map(a => {
+    const on = igPosts.filter(p => p.accountId === a.id && aboutTopic(t.phrase, p.caption)).map(p => ({ p, v: outlierMetric(p)?.value ?? 0 })).sort((x, y) => y.v - x.v);
+    return { accountId: a.id, posts: on.length, median: on.length ? median(on.map(x => x.v)) : null, usual: usualOf.get(a.id) || null,
+      best: on[0] ? { title: (on[0].p.caption ?? '').split('\n')[0]!.slice(0, 120), permalink: on[0].p.permalink, value: on[0].v } : null };
+  })]));
   const conn = await sql.query<{ scopes: string[] }>(`select scopes from vt.social_connections where tenant_id = $1 and provider = 'youtube'`, [ctx.tenantId]);
   return {
     canEdit: EDITORS.includes(ctx.role), isDemo: ctx.isDemo, youtubeConnected: conn.length > 0 || ctx.isDemo,
-    accounts: accountsRaw.map(a => ({ id: a.id, platform: a.platform, name: a.name, handle: a.handle, followers: a.followers, isCompetitor: a.is_competitor, profileUrl: a.profile_url })),
+    accounts: accountsRaw.map(a => ({ id: a.id, platform: a.platform, name: a.name, handle: a.handle, followers: a.followers, isCompetitor: a.is_competitor, profileUrl: a.profile_url, externalId: a.external_id })),
     outliers: outliers.slice(0, 60).map(o => ({ id: o.post.id, accountId: o.account.id, platform: o.post.platform, format: o.post.format, title: (o.post.caption ?? '').split('\n')[0]!.slice(0, 160), postedAt: o.post.postedAt.toISOString(), permalink: o.post.permalink, thumbnailUrl: o.post.thumbnailUrl,
       score: o.score, value: o.value, metric: o.metric, usual: o.usual, ageDays: o.ageDays, themes: o.themes })),
-    patterns, topics: topics.map(t => ({ ...t, result: typeof t.result === 'string' ? (() => { try { return JSON.parse(t.result as unknown as string); } catch { return null; } })() : t.result })), suggestedTopics: topics.length ? [] : DEFAULT_TOPICS[ctx.industry], brandDomain: brandDomains[0] ?? null, usualViewPct, videos,
+    patterns, instagram, topics: topics.map(t => ({ ...t, result: typeof t.result === 'string' ? (() => { try { return JSON.parse(t.result as unknown as string); } catch { return null; } })() : t.result })), suggestedTopics: topics.length ? [] : DEFAULT_TOPICS[ctx.industry], brandDomain: brandDomains[0] ?? null, usualViewPct, videos,
   };
 }
 
