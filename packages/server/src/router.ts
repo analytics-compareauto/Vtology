@@ -14,6 +14,7 @@ import { schemaReady } from './schema';
 import { startConnect, finishConnect, socialOverview, syncTenant, syncAll, syncConnection, disconnect, growthOverview, addCompetitor, removeCompetitor } from './social';
 import { ROLES, type RoleCode } from '@vtology/core';
 import { listSources, createSource, updateSource, deleteSource, syncSource, syncTenantSources, dueSources } from './sources';
+import { listAudiences, createList, appendRows, finishList, deleteList, createBucket, updateBucket, previewBucket, deleteBucket, computeBucket, exportBucket, purgeAllExpired } from './audiences';
 
 const MappingSchema = z.object({
   entity: z.enum(['lead', 'journey_event', 'transaction', 'campaign', 'partner', 'consent']),
@@ -70,9 +71,9 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
         console.log(`[vtology] daily sync, connection ${one}: ${r.accounts} accounts, ${r.posts} posts${r.warnings.length ? `; ${r.warnings.length} warnings` : ''}`);
         return json(200, r);
       }
-      const [r, s] = await Promise.all([syncAll(deps, { selfUrl: deps.social?.publicUrl, internalKey }), syncAllSources(deps, { selfUrl: deps.social?.publicUrl, internalKey })]);
-      console.log(`[vtology] daily sync: ${r.started} connections due, ${r.ok} synced, ${r.failed} failed; ${s.started} data sources due, ${s.ok} pulled, ${s.failed} failed`);
-      return json(200, { ...r, sources: s });
+      const [r, s, purged] = await Promise.all([syncAll(deps, { selfUrl: deps.social?.publicUrl, internalKey }), syncAllSources(deps, { selfUrl: deps.social?.publicUrl, internalKey }), purgeAllExpired(deps)]);
+      console.log(`[vtology] daily sync: ${r.started} connections due, ${r.ok} synced, ${r.failed} failed; ${s.started} data sources due, ${s.ok} pulled, ${s.failed} failed; ${purged} expired audience lists deleted`);
+      return json(200, { ...r, sources: s, expiredLists: purged });
     }
     const userId = await authenticate(req, deps);
     if (top === 'GET workspaces') return json(200, await listWorkspaces(deps, userId));
@@ -111,6 +112,27 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
         if (!['marketing_head', 'data_steward', 'sales_ops'].includes(ctx.role)) throw new HttpError(403, 'Your role cannot sync data sources.');
         return json(200, await syncSource(deps, ctx.tenantId, ss[2]!));
       }
+    }
+    // ---- audiences: hashed lists, buckets with holdouts, logged exports
+    if (route === 'GET audiences') return json(200, await listAudiences(ctx));
+    if (route === 'POST audiences/lists') return json(201, await createList(ctx, await req.json().catch(() => ({}))));
+    if (route === 'POST audiences/buckets') return json(201, await createBucket(ctx, await req.json().catch(() => ({}))));
+    if (route === 'POST audiences/buckets/preview') return json(200, await previewBucket(ctx, await req.json().catch(() => ({}))));
+    const al = route.match(/^(POST|DELETE) audiences\/lists\/([0-9a-f-]{36})(?:\/(rows|finish))?$/);
+    if (al) {
+      if (al[1] === 'POST' && al[3] === 'rows') return json(200, await appendRows(ctx, al[2]!, await req.json().catch(() => ({}))));
+      if (al[1] === 'POST' && al[3] === 'finish') return json(200, await finishList(ctx, al[2]!));
+      if (al[1] === 'DELETE' && !al[3]) return json(200, await deleteList(ctx, al[2]!));
+    }
+    const ab = route.match(/^(PATCH|DELETE|POST|GET) audiences\/buckets\/([0-9a-f-]{36})(?:\/(refresh|export))?$/);
+    if (ab) {
+      if (ab[1] === 'PATCH' && !ab[3]) return json(200, await updateBucket(ctx, ab[2]!, await req.json().catch(() => ({}))));
+      if (ab[1] === 'DELETE' && !ab[3]) return json(200, await deleteBucket(ctx, ab[2]!));
+      if (ab[1] === 'POST' && ab[3] === 'refresh') {
+        if (!['marketing_head', 'data_steward'].includes(ctx.role)) throw new HttpError(403, 'Your role cannot refresh buckets.');
+        return json(200, await computeBucket(ctx.db.admin, ctx.tenantId, ab[2]!));
+      }
+      if (ab[1] === 'GET' && ab[3] === 'export') return json(200, await exportBucket(ctx, ab[2]!, url));
     }
     if (route === 'POST social/competitors') {
       const b = await req.json().catch(() => ({})) as { platform?: unknown; handle?: unknown };

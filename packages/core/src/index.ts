@@ -7,3 +7,4 @@ export * from './actions';
 export * from './social';
 export * from './growth';
 export * from './feed';
+export * from './audience';

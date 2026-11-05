@@ -129,3 +129,4 @@ async function health(auth: boolean, signIn: boolean): Promise<Response> {
 export const GET = route;
 export const POST = route;
 export const DELETE = route;
+export const PATCH = route;
