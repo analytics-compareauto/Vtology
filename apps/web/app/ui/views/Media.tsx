@@ -106,15 +106,18 @@ export function Media({ workspaceId, notify, range, onRange, canEdit }: { worksp
       {allFindings.length > 0 && (
         <section className="panel">
           <div className="panel-head"><div><h2>What to change</h2><p>Found by comparing every deal, site, creative, device and region with the rest of the same campaign, and by how often the same people saw each line.</p></div></div>
-          <div className="rows">{allFindings.map((f, i) => <FindingRow key={i} f={f} />)}</div>
+          <div className="insight-grid">{allFindings.map((f, i) => <FindingCard key={i} f={f} />)}</div>
         </section>
       )}
       {freq.length > 0 && (
         <section className="panel">
           <div className="panel-head"><div><h2>Reach and frequency</h2><p>From the reach report: on an average day, how many people each line reached and how many times each of them saw the ad. Reach can’t be added across days, so these are daily figures.</p></div></div>
+          <FrequencyChart lines={freq} />
+          <details style={{ marginTop: 12 }}><summary className="small">The numbers behind it</summary>
           <Table head={['Line', 'Spend', 'Impressions', 'People reached a day', 'Ads per person a day', 'Worst day']} rows={freq.map(l => [
             <span key="n"><b>{l.campaign}</b><div className="small muted">{CHANNEL_LABEL[l.channel]}, {l.days} days</div></span>, fm(l.cost), compact(l.impressions), compact(l.dailyReach),
             <b key="f" style={{ color: l.dailyFrequency >= 4 ? 'var(--leak)' : l.dailyFrequency >= 3 ? 'var(--warn)' : undefined }}>{l.dailyFrequency.toFixed(1)}</b>, l.maxFrequency.toFixed(1)])} />
+          </details>
         </section>
       )}
       {!d.empty && t && p && (
@@ -128,6 +131,10 @@ export function Media({ workspaceId, notify, range, onRange, canEdit }: { worksp
             {video && <Kpi label="Viewable (video, display)" now={t.viewability} before={p.viewability} fmt={pct} sub="CTV and audio can't be measured" />}
           </section>
           <p className="small muted" style={{ marginTop: -10 }}>{rangeText(range)}, against {previousText(range)}. Amounts in {d.currency || 'the report currency'}.</p>
+          <div className="grid-2">
+            <section className="panel"><div className="panel-head"><div><h2>Where the money went</h2><p>Share of spend by channel, with what each completed view cost.</p></div></div><SpendSplit channels={d.channels ?? []} fm={fm} /></section>
+            <section className="panel"><div className="panel-head"><div><h2>Which supply buys attention cheapest</h2><p>Cost per completed view against the channel average (100). Green is cheaper; bar length is spend.</p></div></div><SupplyChart rows={d.supply ?? []} channels={d.channels ?? []} fm={fm} /></section>
+          </div>
 
 
           <div className="grid-2">
@@ -199,6 +206,77 @@ export function Media({ workspaceId, notify, range, onRange, canEdit }: { worksp
   );
 }
 
+const CH_COLOR: Record<string, string> = { ctv: 'var(--flow)', video: 'var(--warn)', audio: 'var(--ok)', display: 'var(--muted)' };
+
+function FindingCard({ f }: { f: Finding & { figure?: string; figureLabel?: string } }) {
+  const [copied, setCopied] = useState(false);
+  const tone = f.tone === 'bad' ? 'leak' : f.tone === 'good' ? 'ok' : 'flow';
+  return (
+    <div className={`insight ${tone}`}>
+      <div className="fig"><b>{f.figure ?? (f.tone === 'bad' ? '!' : '✓')}</b>{f.figureLabel && <span>{f.figureLabel}</span>}</div>
+      <div className="txt">
+        <span className={`tag ${f.tone === 'bad' ? 'leak' : f.tone === 'good' ? 'ok' : 'plain'}`}>{f.tone === 'bad' ? 'Fix' : f.tone === 'good' ? 'Working' : 'Worth a look'}{f.channel ? ` · ${CHANNEL_LABEL[f.channel]}` : ''}</span>
+        <b>{f.title.replace(/^(Connected TV|Online video|Audio|Display): /, '')}</b>
+        <span className="small">{f.detail}</span>
+        {f.action && <span className="small"><b>Do:</b> {f.action}</span>}
+        {f.names && f.names.length > 0 && <div className="toolbar" style={{ gap: 6 }}>{f.names.slice(0, 6).map(n => <span key={n} className="tag plain">{n}</span>)}{f.names.length > 6 && <span className="small muted">+{f.names.length - 6}</span>}
+          <button className="btn small" onClick={() => { navigator.clipboard?.writeText(f.names!.join('\n')).then(() => setCopied(true)).catch(() => undefined); }}>{copied ? 'Copied' : 'Copy list'}</button></div>}
+      </div>
+    </div>
+  );
+}
+
+function SpendSplit({ channels, fm }: { channels: (M & { channel: Channel; label: string })[]; fm: (v: number | null) => string }) {
+  const total = channels.reduce((a, c) => a + c.cost, 0) || 1;
+  return (
+    <div style={{ display: 'grid', gap: 14 }}>
+      <div className="split-bar">{channels.map(c => <i key={c.channel} style={{ width: `${(c.cost / total) * 100}%`, background: CH_COLOR[c.channel] }} title={`${c.label}: ${fm(c.cost)}`} />)}</div>
+      <div className="split-legend">{channels.map(c => (
+        <div key={c.channel}><i style={{ background: CH_COLOR[c.channel] }} /><span><b>{c.label}</b> {pct(c.cost / total)} · {fm(c.cost)}</span><span className="small muted">{c.completion !== null ? `${pct(c.completion)} complete · ` : ''}{fm(c.costPerQualityComplete)} per completed view</span></div>
+      ))}</div>
+    </div>
+  );
+}
+
+function SupplyChart({ rows, channels, fm }: { rows: (M & { channel: Channel; supply: string; deal: boolean })[]; channels: (M & { channel: Channel })[]; fm: (v: number | null) => string }) {
+  const avg = new Map(channels.map(c => [c.channel, c.costPerQualityComplete]));
+  const items = rows.filter(r => r.costPerQualityComplete && avg.get(r.channel)).slice(0, 10).map(r => ({ r, idx: (r.costPerQualityComplete! / avg.get(r.channel)!) * 100 }));
+  const maxCost = Math.max(1, ...items.map(x => x.r.cost));
+  if (!items.length) return <div className="empty">No supply with completed views in these dates.</div>;
+  return (
+    <div className="supply-chart">{items.map(({ r, idx }) => {
+      const dev = Math.max(-40, Math.min(40, idx - 100));
+      return (
+        <div key={`${r.channel}${r.supply}`} className="sc-row" title={`${fm(r.cost)} spend · ${fm(r.costPerQualityComplete)} per completed view`}>
+          <span className="sc-name">{r.supply}<span className="muted"> · {CHANNEL_LABEL[r.channel]}{r.deal ? ', deal' : ''}</span></span>
+          <span className="sc-track"><i className="sc-mid" /><i className="sc-bar" style={{ left: dev < 0 ? `${50 + (dev / 40) * 50}%` : '50%', width: `${(Math.abs(dev) / 40) * 50}%`, background: dev <= 0 ? 'var(--ok)' : 'var(--leak)', opacity: 0.35 + 0.65 * (r.cost / maxCost) }} /></span>
+          <b className="sc-val">{Math.round(idx)}</b>
+        </div>
+      );
+    })}</div>
+  );
+}
+
+function FrequencyChart({ lines }: { lines: Freq[] }) {
+  const max = Math.max(6, ...lines.map(l => l.maxFrequency));
+  return (
+    <div className="freq-chart">
+      {lines.slice(0, 14).map(l => (
+        <div key={l.campaign} className="fq-row">
+          <span className="sc-name">{l.campaign}<span className="muted"> · {CHANNEL_LABEL[l.channel]}</span></span>
+          <span className="fq-track">
+            <i className="fq-ok" style={{ width: `${(3 / max) * 100}%` }} />
+            <i className="fq-bar" style={{ width: `${(l.dailyFrequency / max) * 100}%`, background: l.dailyFrequency >= 4 ? 'var(--leak)' : l.dailyFrequency >= 3 ? 'var(--warn)' : 'var(--flow)' }} />
+            <i className="fq-max" style={{ left: `${(l.maxFrequency / max) * 100}%` }} title={`worst day ${l.maxFrequency.toFixed(1)}`} />
+          </span>
+          <b className="sc-val">{l.dailyFrequency.toFixed(1)}</b>
+        </div>
+      ))}
+      <div className="legend" style={{ marginTop: 8 }}><span><i style={{ background: 'var(--ok-soft)' }} />healthy zone, up to 3 a day</span><span><i className="line" style={{ background: 'var(--ink)' }} />worst day</span></div>
+    </div>
+  );
+}
+
 function FindingRow({ f }: { f: Finding }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -261,6 +339,17 @@ const FIELD_NAME: Partial<Record<MediaField, string>> = {
 };
 const NEEDED: MediaField[] = ['day', 'impressions', 'cost'];
 
+/** What went wrong with an import, in words that say what to do next. */
+function explain(e: unknown, rows: number): string {
+  if (!(e instanceof ApiError)) return 'The connection dropped during the upload. Nothing was saved; check the internet connection and press Import again.';
+  if (e.status === 413 || /413/.test(e.message)) return 'Part of the file was too big to send in one go. Untick lines you don’t need, or export the report without App/URL, then import again.';
+  if (e.status === 409) return e.message;
+  if (e.status === 401) return 'Your sign-in expired during the upload. Sign in again and import the file once more.';
+  if (e.status === 504 || e.status === 502 || /timed? ?out/i.test(e.message)) return `The server took too long with ${rows.toLocaleString('en-IN')} rows. Nothing was saved. Try again; if it repeats, import a shorter date range or fewer lines.`;
+  if (e.status >= 500) return `Vtology couldn’t save the report, and nothing was kept. Reason: ${e.message.replace(/^Something went wrong on our side ?\(?|\)?\. The error has been logged\.$/g, '') || 'unknown'}. Try again; if it repeats, send this message to support.`;
+  return e.message;
+}
+
 function ImportReport({ T, onDone }: { T: string; onDone: (msg: string | null, coverage?: { from: string; to: string }) => void }) {
   const [name, setName] = useState('');
   const [currency, setCurrency] = useState('');
@@ -269,6 +358,7 @@ function ImportReport({ T, onDone }: { T: string; onDone: (msg: string | null, c
   const [pick, setPick] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [over, setOver] = useState(false);
 
   async function choose(f0: File | undefined) {
     setErr(null); setParsed(null);
@@ -347,7 +437,7 @@ function ImportReport({ T, onDone }: { T: string; onDone: (msg: string | null, c
       const f = await api<{ rows: number; from: string; to: string; overlaps: string[] }>('POST', `${T}/media/reports/${id}/finish`);
       onDone(`${name}: ${num(f.rows)} rows from ${rangeText(f)}.${f.overlaps.length ? ` It covers the same days as ${f.overlaps.join(', ')}; delete one so delivery isn't counted twice.` : ''}`, { from: f.from, to: f.to });
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : 'The import stopped.');
+      setErr(explain(e, parsed.kind === 'reach' ? parsed.reach.length : parsed.rows.length));
       if (id) await api('DELETE', `${T}/media/reports/${id}`).catch(() => undefined);
       setProgress(null);
     }
@@ -358,7 +448,11 @@ function ImportReport({ T, onDone }: { T: string; onDone: (msg: string | null, c
       <b>Import a report</b>
       <span className="small muted">A DV360 delivery report (Reporting, New report, Standard, by Date) or a reach report with Unique Reach, as CSV or Excel. Other DSPs work too if each row has a date, impressions and cost.</span>
       <div className="grid-2" style={{ gap: 12 }}>
-        <label className="field">File<input className="input" type="file" accept=".csv,text/csv,.xlsx,.zip,.gz" onChange={e => choose(e.target.files?.[0])} /></label>
+        <label className={`dropzone${over ? ' over' : ''}`} onDragOver={e => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={e => { e.preventDefault(); setOver(false); choose(e.dataTransfer.files?.[0]); }}>
+          <b>Drop the report here, or click to choose</b>
+          <span className="small muted">CSV, Excel, or a .zip of either. Large files are fine: they are read and squeezed on this computer.</span>
+          <input type="file" accept=".csv,text/csv,.xlsx,.zip,.gz" style={{ display: 'none' }} onChange={e => choose(e.target.files?.[0])} />
+        </label>
         <label className="field">Name<input className="input" value={name} onChange={e => setName(e.target.value)} maxLength={100} placeholder="Lincoln CTV and audio, Q4" /></label>
         <label className="field">Currency<input className="input" value={currency} onChange={e => setCurrency(e.target.value.toUpperCase().slice(0, 3))} placeholder="CAD" /></label>
       </div>

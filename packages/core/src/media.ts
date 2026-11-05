@@ -171,7 +171,7 @@ export function quartiles(s: Sums): { at: string; share: number }[] | null {
 
 // ---------------------------------------------------------------- findings
 export interface Group { key: string; channel?: Channel; deal?: boolean; sums: Sums }
-export interface MediaFinding { tone: 'good' | 'bad' | 'info'; channel?: Channel; title: string; detail: string; action?: string; names?: string[] }
+export interface MediaFinding { tone: 'good' | 'bad' | 'info'; channel?: Channel; title: string; detail: string; action?: string; names?: string[]; /** the one number to show big */ figure?: string; figureLabel?: string }
 export interface FindingsInput {
   total: Sums; previous: Sums;
   byChannel: Group[];
@@ -205,13 +205,13 @@ export function mediaFindings(i: FindingsInput): MediaFinding[] {
       const ratio = worst.m.costPerQualityComplete! / best.m.costPerQualityComplete!;
       if (ratio >= 1.08 && ratio < 1.4 && worst.g.sums.cost >= chCost * 0.2) {
         const extra = worst.g.sums.cost / best.m.costPerQualityComplete! - worst.m.qualityCompletes;
-        out.push({ tone: 'info', channel: ch, title: `${label}: ${worst.g.key} costs ${Math.round((ratio - 1) * 100)}% more per completed view than ${best.g.key}`,
+        out.push({ tone: 'info', channel: ch, figure: `+${Math.round((ratio - 1) * 100)}%`, figureLabel: 'cost per completed view', title: `${label}: ${worst.g.key} costs ${Math.round((ratio - 1) * 100)}% more per completed view than ${best.g.key}`,
           detail: `${worst.g.key} takes ${share(worst.g.sums.cost / chCost)} of ${label} spend${worst.m.completion !== null && best.m.completion !== null ? ` and completes at ${share(worst.m.completion)} against ${share(best.m.completion)}` : ''}.`,
           action: `Shift part of that budget to ${best.g.key}: at its cost, the same money buys about ${Math.round(extra).toLocaleString('en-IN')} more completed views, as long as it can scale.` });
       }
       if (ratio >= 1.4) {
         const extra = worst.g.sums.cost / best.m.costPerQualityComplete! - worst.m.qualityCompletes;
-        out.push({ tone: 'bad', channel: ch, title: `${label}: ${worst.g.key} costs ${times(ratio)} as much per completed view as ${best.g.key}`,
+        out.push({ tone: 'bad', channel: ch, figure: times(ratio), figureLabel: 'cost per completed view', title: `${label}: ${worst.g.key} costs ${times(ratio)} as much per completed view as ${best.g.key}`,
           detail: `${worst.g.key} took ${share(worst.g.sums.cost / chCost)} of ${label} spend at ${i.money(worst.m.costPerQualityComplete!)} per completed${ch === 'video' || ch === 'display' ? ', viewable' : ''} view, against ${i.money(best.m.costPerQualityComplete!)} on ${best.g.key}.`,
           action: `Move budget from ${worst.g.key} to ${best.g.key}: the same money there would have bought about ${Math.round(extra).toLocaleString('en-IN')} more completed views, while ${best.g.key} has room to scale.` });
       }
@@ -222,7 +222,7 @@ export function mediaFindings(i: FindingsInput): MediaFinding[] {
       const d = metrics(deals.reduce((a, g) => addSums(a, g.sums), ZERO)), o = metrics(open.reduce((a, g) => addSums(a, g.sums), ZERO));
       if (d.costPerQualityComplete && o.costPerQualityComplete && d.cost > chCost * 0.05 && o.cost > chCost * 0.05) {
         const better = d.costPerQualityComplete < o.costPerQualityComplete;
-        out.push({ tone: better ? 'good' : 'bad', channel: ch, title: `${label}: private deals ${better ? 'beat' : 'trail'} open auction on cost per completed view`,
+        out.push({ tone: better ? 'good' : 'bad', channel: ch, figure: `${better ? '−' : '+'}${Math.round(Math.abs(1 - d.costPerQualityComplete / o.costPerQualityComplete) * 100)}%`, figureLabel: 'deals vs open auction', title: `${label}: private deals ${better ? 'beat' : 'trail'} open auction on cost per completed view`,
           detail: `Deals: ${i.money(d.costPerQualityComplete)} per completed view, ${d.completion !== null ? `${share(d.completion)} completion` : ''}${d.viewability !== null ? `, ${share(d.viewability)} viewable` : ''}. Open auction: ${i.money(o.costPerQualityComplete)}${o.completion !== null ? `, ${share(o.completion)} completion` : ''}${o.viewability !== null ? `, ${share(o.viewability)} viewable` : ''}.`,
           action: better ? `Shift more ${label} budget into the deals while their cost per completed view holds.` : `Review the deals' floor prices or targeting; open auction is buying attention more cheaply.` });
       }
@@ -232,7 +232,7 @@ export function mediaFindings(i: FindingsInput): MediaFinding[] {
     if (sites.length >= 5 && chM.completion !== null) {
       const bad = sites.filter(x => (x.m.completion !== null && x.m.completion < chM.completion! * 0.6) || (x.m.viewability !== null && x.m.viewability < 0.5));
       const badCost = bad.reduce((a, x) => a + x.g.sums.cost, 0);
-      if (bad.length && badCost >= chCost * 0.03) out.push({ tone: 'bad', channel: ch, title: `${label}: ${bad.length} ${bad.length === 1 ? 'site or app takes' : 'sites and apps take'} ${share(badCost / chCost)} of spend with little attention to show`,
+      if (bad.length && badCost >= chCost * 0.03) out.push({ tone: 'bad', channel: ch, figure: share(badCost / chCost), figureLabel: 'of spend wasted', title: `${label}: ${bad.length} ${bad.length === 1 ? 'site or app takes' : 'sites and apps take'} ${share(badCost / chCost)} of spend with little attention to show`,
         detail: `Each completes under 60% as often as the ${label} average (${share(chM.completion!)})${ch === 'video' || ch === 'display' ? ', or is viewable less than half the time' : ''}.`,
         action: `Add them to a block list for ${label}.`, names: bad.sort((a, b) => b.g.sums.cost - a.g.sums.cost).slice(0, 20).map(x => x.g.key) });
     }
@@ -241,7 +241,7 @@ export function mediaFindings(i: FindingsInput): MediaFinding[] {
     if (q) {
       const drops = q.slice(1).map((x, k) => ({ at: `${q[k]!.at} to ${x.at}`, lost: q[k]!.share - x.share }));
       const worst = drops.sort((a, b) => b.lost - a.lost)[0]!;
-      if (worst.lost >= 0.12) out.push({ tone: 'info', channel: ch, title: `${label}: the biggest drop is ${worst.at}, where ${share(worst.lost)} of ${ch === 'audio' ? 'listeners' : 'viewers'} leave`,
+      if (worst.lost >= 0.12) out.push({ tone: 'info', channel: ch, figure: share(worst.lost), figureLabel: `leave at ${worst.at}`, title: `${label}: the biggest drop is ${worst.at}, where ${share(worst.lost)} of ${ch === 'audio' ? 'listeners' : 'viewers'} leave`,
         detail: `${share(q.at(-1)!.share)} make it to the end.`,
         action: worst.at.startsWith('Start') ? `Put the brand and the hook in the first seconds; test a shorter cut.` : `Test a shorter version that ends before ${worst.at.split(' to ')[1]}.` });
     }
@@ -255,14 +255,14 @@ export function mediaFindings(i: FindingsInput): MediaFinding[] {
       const early = (s[0]!.m.completion! + s[1]!.m.completion!) / 2, late = (s.at(-1)!.m.completion! + s.at(-2)!.m.completion!) / 2;
       if (late < early * 0.88) tired.push(`${name} (${share(early)} to ${share(late)})`);
     }
-    if (tired.length) out.push({ tone: 'bad', channel: ch, title: `${label}: ${tired.length === 1 ? 'one creative is' : `${tired.length} creatives are`} wearing out`,
+    if (tired.length) out.push({ tone: 'bad', channel: ch, figure: String(tired.length), figureLabel: tired.length === 1 ? 'creative wearing out' : 'creatives wearing out', title: `${label}: ${tired.length === 1 ? 'one creative is' : `${tired.length} creatives are`} wearing out`,
       detail: `Completion has fallen by more than a tenth from their first two weeks to their last two.`, action: `Rotate in fresh cuts or cap frequency on these creatives.`, names: tired });
     // 6. devices, for online video: phones, desktops and TV screens behave differently
     const dev = i.byDevice.filter(g => g.channel === ch && g.key && g.sums.cost >= chCost * 0.1).map(g => ({ g, m: metrics(g.sums) })).filter(x => x.m.costPerQualityComplete);
     if (dev.length >= 2) {
       dev.sort((a, b) => a.m.costPerQualityComplete! - b.m.costPerQualityComplete!);
       const r = dev.at(-1)!.m.costPerQualityComplete! / dev[0]!.m.costPerQualityComplete!;
-      if (r >= 1.5) out.push({ tone: 'info', channel: ch, title: `${label}: completed views cost ${share(1 - 1 / r)} less on ${dev[0]!.g.key} than on ${dev.at(-1)!.g.key}`,
+      if (r >= 1.5) out.push({ tone: 'info', channel: ch, figure: times(r), figureLabel: 'device cost gap', title: `${label}: completed views cost ${share(1 - 1 / r)} less on ${dev[0]!.g.key} than on ${dev.at(-1)!.g.key}`,
         detail: `${dev[0]!.g.key}: ${i.money(dev[0]!.m.costPerQualityComplete!)} per completed view; ${dev.at(-1)!.g.key}: ${i.money(dev.at(-1)!.m.costPerQualityComplete!)}.`, action: `Adjust device bids towards ${dev[0]!.g.key}.` });
     }
   }
@@ -272,14 +272,14 @@ export function mediaFindings(i: FindingsInput): MediaFinding[] {
   if (regs.length >= 3) {
     const mid = median(regs.map(x => x.m.costPerQualityComplete!));
     const dear = regs.filter(x => x.m.costPerQualityComplete! > mid * 1.5);
-    if (dear.length) out.push({ tone: 'info', title: `${dear.length === 1 ? 'One region costs' : `${dear.length} regions cost`} far more per completed view`,
+    if (dear.length) out.push({ tone: 'info', figure: String(dear.length), figureLabel: dear.length === 1 ? 'costly region' : 'costly regions', title: `${dear.length === 1 ? 'One region costs' : `${dear.length} regions cost`} far more per completed view`,
       detail: `${dear.map(x => `${x.g.key} (${i.money(x.m.costPerQualityComplete!)})`).join(', ')}, against a middle of ${i.money(mid)}.`, action: `Check whether these markets matter more to the brand (dealers, sales); if not, lower their bids.` });
   }
   // 8. pacing: the last week against the one before
   const days = [...i.daily].sort((a, b) => a.day.localeCompare(b.day));
   if (days.length >= 14) {
     const last = days.slice(-7).reduce((a, d) => a + d.sums.cost, 0), prev = days.slice(-14, -7).reduce((a, d) => a + d.sums.cost, 0);
-    if (prev > 0 && Math.abs(last / prev - 1) >= 0.25) out.push({ tone: 'info', title: `Spend ${last > prev ? 'rose' : 'fell'} ${share(Math.abs(last / prev - 1))} in the last 7 days`,
+    if (prev > 0 && Math.abs(last / prev - 1) >= 0.25) out.push({ tone: 'info', figure: `${last > prev ? '+' : '−'}${share(Math.abs(last / prev - 1))}`, figureLabel: 'spend, last 7 days', title: `Spend ${last > prev ? 'rose' : 'fell'} ${share(Math.abs(last / prev - 1))} in the last 7 days`,
       detail: `${i.money(last)} against ${i.money(prev)} the week before.`, action: last > prev ? 'Check that pacing matches the flight plan.' : 'Check for paused lines, exhausted deals or caps.' });
   }
   const order = { bad: 0, good: 1, info: 2 } as const;
@@ -318,12 +318,12 @@ export function frequencyLines(rows: ReachRow[]): FrequencyLine[] {
 /** Lines showing the ad to the same people too often in a day. */
 export function frequencyFindings(lines: FrequencyLine[], money: (v: number) => string): MediaFinding[] {
   const heavy = lines.filter(l => l.dailyFrequency >= 4 && l.impressions >= 10_000);
-  const out: MediaFinding[] = heavy.map(l => ({ tone: 'bad' as const, channel: l.channel,
+  const out: MediaFinding[] = heavy.map(l => ({ tone: 'bad' as const, channel: l.channel, figure: `${l.dailyFrequency.toFixed(1)}×`, figureLabel: 'ads per person a day',
     title: `${l.campaign}: each person saw the ad ${l.dailyFrequency.toFixed(1)} times a day on average`,
     detail: `About ${Math.round(l.dailyReach).toLocaleString('en-IN')} people a day were reached with ${Math.round(l.impressions / Math.max(1, l.days)).toLocaleString('en-IN')} impressions a day (${money(l.cost)} over ${l.days} days); on the worst day it was ${l.maxFrequency.toFixed(1)} times. High completion rates on such a line mostly mean the same homes watching again.`,
     action: `Cap frequency at 2 to 3 a day${l.channel === 'ctv' ? ' per household' : ''}. With enough supply, the same spend could reach up to ${(l.dailyFrequency / 2.5).toFixed(1)}× as many people a day.` }));
   const mid = lines.filter(l => l.dailyFrequency >= 3 && l.dailyFrequency < 4 && l.impressions >= 10_000);
-  if (mid.length) out.push({ tone: 'info', title: `${mid.length === 1 ? 'One more line shows' : `${mid.length} more lines show`} the ad 3 to 4 times a day per person`, detail: mid.map(l => `${l.campaign} (${l.dailyFrequency.toFixed(1)})`).join('; '), action: 'Watch these: past 3 a day, extra impressions mostly repeat to the same people.' });
+  if (mid.length) out.push({ tone: 'info', figure: String(mid.length), figureLabel: 'lines at 3–4 a day', title: `${mid.length === 1 ? 'One more line shows' : `${mid.length} more lines show`} the ad 3 to 4 times a day per person`, detail: mid.map(l => `${l.campaign} (${l.dailyFrequency.toFixed(1)})`).join('; '), action: 'Watch these: past 3 a day, extra impressions mostly repeat to the same people.' });
   return out;
 }
 
