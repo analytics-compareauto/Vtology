@@ -802,6 +802,27 @@ create policy media_reports_read on vt.media_reports for select to authenticated
 create policy media_rows_read on vt.media_rows for select to authenticated using (vt.member_role(tenant_id) in ('data_steward', 'marketing_head', 'finance'));
 grant select on vt.media_reports, vt.media_rows to authenticated;
 
+-- ===== 20261105000012_content.sql =====
+-- Content intelligence: topics a brand tracks on YouTube search (what people look for, who ranks),
+-- and per-video retention curves fetched from YouTube Analytics on demand.
+create table if not exists vt.content_topics (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references vt.tenants(id) on delete cascade,
+  phrase text not null,
+  added_by uuid,
+  added_at timestamptz not null default now(),
+  last_scan_at timestamptz,
+  result jsonb,
+  last_error text
+);
+create unique index if not exists content_topics_phrase on vt.content_topics (tenant_id, lower(phrase));
+alter table vt.content_topics enable row level security;
+create policy content_topics_read on vt.content_topics for select to authenticated using (vt.sees_social(tenant_id));
+grant select on vt.content_topics to authenticated;
+
+alter table vt.social_posts add column if not exists retention jsonb;
+alter table vt.social_posts add column if not exists retention_at timestamptz;
+
 create schema if not exists vt_meta;
 create table if not exists vt_meta.schema_migrations (id text primary key, applied_at timestamptz not null default now());
-insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth'), ('20261103000009_data_sources'), ('20261105000010_audiences'), ('20261105000011_media') on conflict do nothing;
+insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth'), ('20261103000009_data_sources'), ('20261105000010_audiences'), ('20261105000011_media'), ('20261105000012_content') on conflict do nothing;

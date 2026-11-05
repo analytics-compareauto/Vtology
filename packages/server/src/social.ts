@@ -366,7 +366,7 @@ const youtube = {
         for (const v of vs.items) {
           const secs = isoSeconds(v.contentDetails?.duration);
           const a = analytics.get(v.id);
-          posts.push({ platform: 'youtube', accountExternalId: c.id, externalId: v.id, postedAt: v.snippet.publishedAt, caption: `${v.snippet.title}\n${(v.snippet.description ?? '').slice(0, 500)}`,
+          posts.push({ platform: 'youtube', accountExternalId: c.id, externalId: v.id, postedAt: v.snippet.publishedAt, caption: `${v.snippet.title}\n${(v.snippet.description ?? '').slice(0, 5000)}`,
             permalink: `https://youtube.com/watch?v=${v.id}`, thumbnailUrl: (v.snippet.thumbnails?.medium ?? v.snippet.thumbnails?.high ?? v.snippet.thumbnails?.default)?.url ?? null, durationS: secs, format: secs !== null && secs <= 60 ? 'short' : 'video',
             views: Number(v.statistics?.viewCount ?? a?.views ?? 0), likes: Number(v.statistics?.likeCount ?? 0), comments: Number(v.statistics?.commentCount ?? 0),
             shares: a?.shares ?? null, watchMinutes: a?.minutes ?? null, avgViewPct: a?.pct ?? null });
@@ -688,3 +688,19 @@ export async function removeCompetitor(ctx: Ctx, id: string) {
 
 const daysOf = (r: DateRange) => Math.round((Date.parse(r.to) - Date.parse(r.from)) / 86_400_000) + 1;
 const defaultRange = (now: Date, days: number): DateRange => ({ from: new Date(now.getTime() - (days - 1) * 86_400_000).toISOString().slice(0, 10), to: now.toISOString().slice(0, 10) });
+
+/** A working YouTube access key for a workspace (refreshed and saved when it has expired), or null when YouTube isn't connected. */
+export async function youtubeToken(deps: Deps, tenantId: string): Promise<{ token: string; connectionId: string } | null> {
+  const secret = requireSecret(deps.secretKey);
+  const [c] = await deps.db.admin.query<{ id: string; access_token_enc: string; refresh_token_enc: string | null; expires_at: string | null }>(
+    `select c.id, t.access_token_enc, t.refresh_token_enc, t.expires_at from vt.social_connections c join vt.social_tokens t on t.connection_id = c.id
+      where c.tenant_id = $1 and c.provider = 'youtube' and c.status <> 'revoked'`, [tenantId]);
+  if (!c || !deps.social?.google) return null;
+  let tokens: Tokens = { accessToken: decrypt(secret, c.access_token_enc), refreshToken: c.refresh_token_enc ? decrypt(secret, c.refresh_token_enc) : null, expiresAt: c.expires_at ? new Date(c.expires_at) : null };
+  if (tokens.refreshToken && (!tokens.expiresAt || tokens.expiresAt.getTime() - 60_000 < Date.now())) {
+    const r = await youtube.token(deps.social, deps.fetch ?? fetch, { refresh_token: tokens.refreshToken, grant_type: 'refresh_token' });
+    tokens = { accessToken: r.access_token, refreshToken: tokens.refreshToken, expiresAt: new Date(Date.now() + (r.expires_in ?? 3600) * 1000) };
+    await saveTokens(deps.db.admin, secret, c.id, tenantId, tokens);
+  }
+  return { token: tokens.accessToken, connectionId: c.id };
+}

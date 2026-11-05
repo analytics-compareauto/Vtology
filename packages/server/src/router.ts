@@ -14,6 +14,7 @@ import { schemaReady } from './schema';
 import { startConnect, finishConnect, socialOverview, syncTenant, syncAll, syncConnection, disconnect, growthOverview, addCompetitor, removeCompetitor } from './social';
 import { ROLES, type RoleCode } from '@vtology/core';
 import { listSources, createSource, updateSource, deleteSource, syncSource, syncTenantSources, dueSources } from './sources';
+import { contentOverview, addTopics, removeTopic, suggestTopics, scanTopics, videoRetention } from './content';
 import { listReports, createReport, appendMediaRows, finishReport, deleteReport, mediaOverview } from './media';
 import { listAudiences, createList, appendRows, finishList, deleteList, createBucket, updateBucket, previewBucket, deleteBucket, computeBucket, exportBucket, purgeAllExpired } from './audiences';
 
@@ -114,6 +115,15 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
         return json(200, await syncSource(deps, ctx.tenantId, ss[2]!));
       }
     }
+    // ---- content: outliers, topics people search, video checks and retention
+    if (route === 'GET content') return json(200, await contentOverview(deps, ctx, rangeParam(url, ctx.now, 90)));
+    if (route === 'POST content/topics') return json(201, await addTopics(ctx, await req.json().catch(() => ({}))));
+    if (route === 'POST content/topics/scan') return json(200, await scanTopics(deps, ctx, await req.json().catch(() => ({}))));
+    if (route === 'GET content/topics/suggest') return json(200, await suggestTopics(deps, ctx, url.searchParams.get('q') ?? ''));
+    const ct = route.match(/^DELETE content\/topics\/([0-9a-f-]{36})$/);
+    if (ct) return json(200, await removeTopic(ctx, ct[1]!));
+    const cv = route.match(/^GET content\/videos\/([0-9a-f-]{36})\/retention$/);
+    if (cv) return json(200, await videoRetention(deps, ctx, cv[1]!));
     // ---- media: DSP delivery reports for awareness analysis (CTV, audio, video, display)
     if (route === 'GET media') return json(200, await mediaOverview(ctx, rangeParam(url, ctx.now, 30), { channel: url.searchParams.get('channel'), report: url.searchParams.get('report') }));
     if (route === 'GET media/reports') return json(200, await listReports(ctx));
