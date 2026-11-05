@@ -52,14 +52,14 @@ export async function appendMediaRows(ctx: Ctx, id: string, body: { rows?: unkno
     if (typeof r.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(r.day) || Number.isNaN(Date.parse(r.day)) || !CHANNELS.includes(r.channel as Channel)) { bad++; continue; }
     const nums = NUMS.map(k => Number(r[k] ?? 0));
     if (nums.some(n => !Number.isFinite(n) || n < 0 || n > 1e12)) { bad++; continue; }
-    cols.day!.push(r.day); cols.channel!.push(r.channel); cols.deal!.push(r.deal === true); cols.currency!.push(String(r.currency ?? '').toUpperCase().slice(0, 3));
+    cols.day!.push(r.day); cols.channel!.push(r.channel); cols.deal!.push(r.deal === true ? 'true' : 'false'); cols.currency!.push(String(r.currency ?? '').toUpperCase().slice(0, 3));
     for (const k of TEXTS) cols[k]!.push(String(r[k] ?? '').trim().slice(0, 200) || (k === 'supply' ? 'Open auction' : ''));
     NUMS.forEach((k, j) => cols[k]!.push(nums[j]));
   }
   if (cols.day!.length) await ctx.db.admin.query(
     `insert into vt.media_rows (tenant_id, report_id, day, channel, deal, campaign, line_item, line_item_type, creative, exchange, supply, site, device, region, ${NUMS.join(', ')})
-     select $1, $2, d::date, ch, dl, c1, c2, c3, c4, c5, c6, c7, c8, c9, n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11, n12
-       from unnest($3::text[], $4::text[], $5::boolean[], $6::text[], $7::text[], $8::text[], $9::text[], $10::text[], $11::text[], $12::text[], $13::text[], $14::text[],
+     select $1, $2, d::date, ch, dl::boolean, c1, c2, c3, c4, c5, c6, c7, c8, c9, n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11, n12
+       from unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[], $10::text[], $11::text[], $12::text[], $13::text[], $14::text[],
                    $15::numeric[], $16::numeric[], $17::numeric[], $18::numeric[], $19::numeric[], $20::numeric[], $21::numeric[], $22::numeric[], $23::numeric[], $24::numeric[], $25::numeric[], $26::numeric[])
          as t(d, ch, dl, c1, c2, c3, c4, c5, c6, c7, c8, c9, n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11, n12)`,
     [ctx.tenantId, id, cols.day, cols.channel, cols.deal, ...TEXTS.map(k => cols[k]), ...NUMS.map(k => cols[k])]);
