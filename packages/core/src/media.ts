@@ -74,8 +74,8 @@ export type Channel = 'ctv' | 'audio' | 'video' | 'display';
 export const CHANNEL_LABEL: Record<Channel, string> = { ctv: 'Connected TV', audio: 'Audio', video: 'Online video', display: 'Display' };
 
 export function channelOf(t: { lineItemType?: string; creativeType?: string; environment?: string; device?: string; lineItem?: string; creative?: string; starts?: number; completes?: number }): Channel {
-  const kind = `${t.lineItemType ?? ''} ${t.creativeType ?? ''}`.toLowerCase();
-  const names = `${t.lineItem ?? ''} ${t.creative ?? ''}`.toLowerCase();
+  const kind = `${t.lineItemType ?? ''} ${t.creativeType ?? ''}`.toLowerCase().replace(/[_~|]+/g, ' ');
+  const names = `${t.lineItem ?? ''} ${t.creative ?? ''}`.toLowerCase().replace(/[_~|]+/g, ' ');
   const where = `${t.environment ?? ''} ${t.device ?? ''}`.toLowerCase();
   if (/audio|podcast/.test(kind) || /\baudio\b|podcast|spotify|\bradio\b/.test(names)) return 'audio';
   if (/connected tv|ctv|ott|over.the.top/.test(kind) || /connected tv|smart tv|\bctv\b|\bott\b/.test(where) || /\bctv\b|\bott\b|connected tv/.test(names)) return 'ctv';

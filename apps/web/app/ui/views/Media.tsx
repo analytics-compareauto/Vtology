@@ -85,6 +85,27 @@ export function Media({ workspaceId, notify, range, onRange, canEdit }: { worksp
   const outside = d.coverage && (range.to < d.coverage.from || range.from > d.coverage.to);
   const t = d.total, p = d.previous;
   const video = (d.channels ?? []).some(c => c.viewability !== null);
+  const insights = (
+    <>
+      {allFindings.length > 0 && (
+        <section className="panel">
+          <div className="panel-head"><div><h2>What to change</h2><p>Found by comparing every deal, site, creative, device and region with the rest of the same campaign, and by how often the same people saw each line.</p></div></div>
+          <div className="insight-grid">{allFindings.map((f, i) => <FindingCard key={i} f={f} />)}</div>
+        </section>
+      )}
+      {freq.length > 0 && (
+        <section className="panel">
+          <div className="panel-head"><div><h2>Reach and frequency</h2><p>From the reach report: on an average day, how many people each line reached and how many times each of them saw the ad. Reach can’t be added across days, so these are daily figures.</p></div></div>
+          <FrequencyChart lines={freq} />
+          <details style={{ marginTop: 12 }}><summary className="small">The numbers behind it</summary>
+          <Table head={['Line', 'Spend', 'Impressions', 'People reached a day', 'Ads per person a day', 'Worst day']} rows={freq.map(l => [
+            <span key="n"><b>{l.campaign}</b><div className="small muted">{CHANNEL_LABEL[l.channel]}, {l.days} days</div></span>, fm(l.cost), compact(l.impressions), compact(l.dailyReach),
+            <b key="f" style={{ color: l.dailyFrequency >= 4 ? 'var(--leak)' : l.dailyFrequency >= 3 ? 'var(--warn)' : undefined }}>{l.dailyFrequency.toFixed(1)}</b>, l.maxFrequency.toFixed(1)])} />
+          </details>
+        </section>
+      )}
+    </>
+  );
   const presentChannels = (['ctv', 'video', 'audio', 'display'] as Channel[]).filter(c => (d.supply ?? []).some(x => x.channel === c) || (d.channels ?? []).some(x => x.channel === c));
 
   return (
@@ -103,23 +124,7 @@ export function Media({ workspaceId, notify, range, onRange, canEdit }: { worksp
       {importer}
       {d.mixed && <div className="note-box">These reports are in different currencies ({d.currencies.join(', ')}), so they can't be added together. Choose one report above.</div>}
       {outside && d.coverage && <div className="note-box">Your reports cover {rangeText(d.coverage)}, outside the dates chosen. <button className="btn small link" onClick={() => onRange({ preset: 'custom', from: d.coverage!.from, to: d.coverage!.to })}>Show {rangeText(d.coverage)}</button></div>}
-      {allFindings.length > 0 && (
-        <section className="panel">
-          <div className="panel-head"><div><h2>What to change</h2><p>Found by comparing every deal, site, creative, device and region with the rest of the same campaign, and by how often the same people saw each line.</p></div></div>
-          <div className="insight-grid">{allFindings.map((f, i) => <FindingCard key={i} f={f} />)}</div>
-        </section>
-      )}
-      {freq.length > 0 && (
-        <section className="panel">
-          <div className="panel-head"><div><h2>Reach and frequency</h2><p>From the reach report: on an average day, how many people each line reached and how many times each of them saw the ad. Reach can’t be added across days, so these are daily figures.</p></div></div>
-          <FrequencyChart lines={freq} />
-          <details style={{ marginTop: 12 }}><summary className="small">The numbers behind it</summary>
-          <Table head={['Line', 'Spend', 'Impressions', 'People reached a day', 'Ads per person a day', 'Worst day']} rows={freq.map(l => [
-            <span key="n"><b>{l.campaign}</b><div className="small muted">{CHANNEL_LABEL[l.channel]}, {l.days} days</div></span>, fm(l.cost), compact(l.impressions), compact(l.dailyReach),
-            <b key="f" style={{ color: l.dailyFrequency >= 4 ? 'var(--leak)' : l.dailyFrequency >= 3 ? 'var(--warn)' : undefined }}>{l.dailyFrequency.toFixed(1)}</b>, l.maxFrequency.toFixed(1)])} />
-          </details>
-        </section>
-      )}
+      {d.empty && insights}
       {!d.empty && t && p && (
         <>
           <section className="kpis" aria-label="Key figures" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
@@ -135,6 +140,7 @@ export function Media({ workspaceId, notify, range, onRange, canEdit }: { worksp
             <section className="panel"><div className="panel-head"><div><h2>Where the money went</h2><p>Share of spend by channel, with what each completed view cost.</p></div></div><SpendSplit channels={d.channels ?? []} fm={fm} /></section>
             <section className="panel"><div className="panel-head"><div><h2>Which supply buys attention cheapest</h2><p>Cost per completed view against the channel average (100). Green is cheaper; bar length is spend.</p></div></div><SupplyChart rows={d.supply ?? []} channels={d.channels ?? []} fm={fm} /></section>
           </div>
+          {insights}
 
 
           <div className="grid-2">
