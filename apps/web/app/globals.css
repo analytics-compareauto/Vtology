@@ -591,3 +591,12 @@ table.bench tr.you td:first-child { box-shadow: inset 3px 0 0 var(--flow); }
 .fatigue { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--surface); border-left-width: 4px; }
 .fatigue.wearing-out { border-left-color: var(--leak); } .fatigue.slipping { border-left-color: var(--warn); } .fatigue.steady { border-left-color: var(--ok); }
 .fatigue .ht-head { display: flex; justify-content: space-between; gap: 8px; align-items: center; min-width: 0; }
+.rank-bars { display: grid; gap: 7px; }
+.rb-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13px; }
+.rb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-track { height: 10px; background: var(--line-soft); border-radius: 5px; overflow: hidden; }
+.rb-track i { display: block; height: 100%; border-radius: 5px; }
+.rb-val { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 12.5px; }
+.site-list { display: grid; gap: 8px; margin-top: 8px; }
+.site-chip { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-s); align-items: center; }
+.site-chip .small { grid-column: 1; } .site-chip .tag { grid-column: 2; grid-row: 1 / span 2; }

@@ -169,19 +169,14 @@ export function Media({ workspaceId, notify, range, onRange, canEdit }: { worksp
             </div>
           </section>
 
-          <section className="panel">
-            <div className="panel-head"><div><h2>Supply: deals and open auction</h2><p>Each inventory source against the average of its channel. Below 100 is cheaper attention.</p></div></div>
-            <IndexTable fm={fm} rows={(d.supply ?? []).map(s => ({ name: s.supply, tag: s.deal ? 'Deal' : 'Open auction', channel: s.channel, m: s }))} channels={d.channels ?? []} />
-          </section>
-
           <div className="grid-2">
             <section className="panel">
-              <div className="panel-head"><div><h2>Line items</h2></div></div>
-              <Table head={['Line item', 'Spend', 'Completion', 'Cost per completed view']} rows={(d.lineItems ?? []).slice(0, 15).map(l => [<span key="n"><b>{l.line_item || '(none)'}</b><div className="small muted">{CHANNEL_LABEL[l.channel]}</div></span>, fm(l.cost), rate(l.completion), fm(l.costPerQualityComplete)])} />
+              <div className="panel-head"><div><h2>Line items</h2><p>Bar length is spend; green costs less per completed view than its channel average, red more.</p></div></div>
+              <RankBars items={(d.lineItems ?? []).map(l => ({ name: l.line_item || '(none)', channel: l.channel, m: l }))} channels={d.channels ?? []} fm={fm} />
             </section>
             <section className="panel">
-              <div className="panel-head"><div><h2>Creatives</h2></div></div>
-              <Table head={['Creative', 'Spend', 'Completion', 'Cost per completed view']} rows={(d.creatives ?? []).slice(0, 15).map(c => [<span key="n"><b>{c.creative || '(none)'}</b><div className="small muted">{CHANNEL_LABEL[c.channel]}</div></span>, fm(c.cost), rate(c.completion), fm(c.costPerQualityComplete)])} />
+              <div className="panel-head"><div><h2>Creatives</h2><p>Same scale: spend, and cost per completed view against the channel.</p></div></div>
+              <RankBars items={(d.creatives ?? []).map(c => ({ name: c.creative || '(none)', channel: c.channel, m: c }))} channels={d.channels ?? []} fm={fm} />
             </section>
           </div>
 
@@ -201,18 +196,18 @@ export function Media({ workspaceId, notify, range, onRange, canEdit }: { worksp
           )}
 
           <section className="panel">
-            <div className="panel-head"><div><h2>Sites and apps</h2><p>The 30 with the most spend. Red marks completion under 60% of its channel, or viewability under half.</p></div></div>
-            <IndexTable fm={fm} rows={(d.sites ?? []).slice(0, 30).map(s => ({ name: s.site || '(not reported)', channel: s.channel, m: s }))} channels={d.channels ?? []} flag />
+            <div className="panel-head"><div><h2>Sites and apps</h2><p>Where attention came cheapest, and where to block or review.</p></div></div>
+            <SiteSplit sites={d.sites ?? []} channels={d.channels ?? []} fm={fm} />
           </section>
 
           <div className="grid-2">
             <section className="panel">
               <div className="panel-head"><div><h2>Devices</h2></div></div>
-              <Table head={['Device', 'Spend', 'Completion', 'Cost per completed view']} rows={(d.devices ?? []).slice(0, 12).map(x => [<span key="n"><b>{x.device || '(not reported)'}</b><div className="small muted">{CHANNEL_LABEL[x.channel]}</div></span>, fm(x.cost), rate(x.completion), fm(x.costPerQualityComplete)])} />
+              <RankBars items={(d.devices ?? []).map(x => ({ name: x.device || '(not reported)', channel: x.channel, m: x }))} channels={d.channels ?? []} fm={fm} limit={6} />
             </section>
             <section className="panel">
               <div className="panel-head"><div><h2>Regions</h2></div></div>
-              <Table head={['Region', 'Spend', 'Share', 'Cost per completed view']} rows={(d.regions ?? []).slice(0, 15).map(x => [<b key="n">{x.region || '(not reported)'}</b>, fm(x.cost), pct(x.cost / Math.max(1, t.cost)), fm(x.costPerQualityComplete)])} />
+              <RankBars items={(d.regions ?? []).map(x => ({ name: x.region || '(not reported)', channel: undefined, m: x }))} channels={d.channels ?? []} fm={fm} total={t} limit={8} />
             </section>
           </div>
         </>
@@ -295,6 +290,51 @@ function FrequencyChart({ lines }: { lines: Freq[] }) {
         </div>
       ))}
       <div className="legend" style={{ marginTop: 8 }}><span><i style={{ background: 'var(--ok-soft)' }} />healthy zone, up to 3 a day</span><span><i className="line" style={{ background: 'var(--ink)' }} />worst day</span></div>
+    </div>
+  );
+}
+
+/** Compact ranking: bar = spend, colour = cost per completed view against the channel (or overall) average. */
+function RankBars({ items, channels, fm, limit = 8, total }: { items: { name: string; channel?: Channel; m: M }[]; channels: (M & { channel: Channel })[]; fm: (v: number | null) => string; limit?: number; total?: M }) {
+  const avg = (c?: Channel) => (c ? channels.find(x => x.channel === c)?.costPerQualityComplete : total?.costPerQualityComplete) ?? null;
+  const top = items.slice(0, limit), max = Math.max(1, ...top.map(x => x.m.cost));
+  if (!top.length) return <div className="empty">Nothing in these dates.</div>;
+  return (
+    <div className="rank-bars">{top.map(x => {
+      const a = avg(x.channel), idx = a && x.m.costPerQualityComplete ? x.m.costPerQualityComplete / a : null;
+      const tone = idx === null ? 'var(--muted)' : idx <= 0.95 ? 'var(--ok)' : idx >= 1.1 ? 'var(--leak)' : 'var(--flow)';
+      return (
+        <div key={`${x.channel}${x.name}`} className="rb-row" title={`${x.name}: ${fm(x.m.cost)} spend, ${fm(x.m.costPerQualityComplete)} per completed view, ${rate(x.m.completion)} completion`}>
+          <span className="rb-name">{x.name}{x.channel && <span className="muted"> · {CHANNEL_LABEL[x.channel]}</span>}</span>
+          <span className="rb-track"><i style={{ width: `${(x.m.cost / max) * 100}%`, background: tone }} /></span>
+          <span className="rb-val"><b>{fm(x.m.costPerQualityComplete)}</b><span className="muted"> · {rate(x.m.completion)}</span></span>
+        </div>
+      );
+    })}{items.length > limit && <span className="small muted">and {items.length - limit} more</span>}</div>
+  );
+}
+
+/** Sites and apps in two short lists: the cheapest attention, and the ones to block or review. */
+function SiteSplit({ sites, channels, fm }: { sites: (M & { channel: Channel; site: string })[]; channels: (M & { channel: Channel })[]; fm: (v: number | null) => string }) {
+  const total = sites.reduce((a, x) => a + x.cost, 0) || 1;
+  const ch = (c: Channel) => channels.find(x => x.channel === c);
+  const rated = sites.filter(x => x.site && !/^Other sites/.test(x.site) && x.cost >= total * 0.003 && x.costPerQualityComplete && ch(x.channel)?.costPerQualityComplete)
+    .map(x => ({ x, idx: x.costPerQualityComplete! / ch(x.channel)!.costPerQualityComplete!, weak: (x.completion !== null && ch(x.channel)!.completion !== null && x.completion < ch(x.channel)!.completion! * 0.6) || (x.viewability !== null && x.viewability < 0.5) }));
+  const best = [...rated].filter(r => !r.weak).sort((a, b) => a.idx - b.idx).slice(0, 6);
+  const worst = [...rated].sort((a, b) => Number(b.weak) - Number(a.weak) || b.idx - a.idx).filter(r => r.weak || r.idx >= 1.2).slice(0, 6);
+  const List = ({ rows, good }: { rows: typeof rated; good: boolean }) => (
+    <div className="site-list">{rows.length ? rows.map(({ x, idx }) => (
+      <div key={`${x.channel}${x.site}`} className="site-chip">
+        <b className="rb-name" title={x.site}>{x.site}</b>
+        <span className="small muted">{CHANNEL_LABEL[x.channel]} · {fm(x.cost)} · {rate(x.completion)} complete{x.viewability !== null ? ` · ${pct(x.viewability)} viewable` : ''}</span>
+        <span className={`tag ${good ? 'ok' : 'leak'}`}>{good ? `${Math.round((1 - idx) * 100)}% cheaper` : idx >= 1 ? `${Math.round((idx - 1) * 100)}% dearer` : 'little attention'}</span>
+      </div>
+    )) : <span className="small muted">None stand out.</span>}</div>
+  );
+  return (
+    <div className="grid-2">
+      <div><b className="small" style={{ color: 'var(--ok)' }}>Cheapest attention: give these more</b><List rows={best} good /></div>
+      <div><b className="small" style={{ color: 'var(--leak)' }}>Block or review</b><List rows={worst} good={false} /></div>
     </div>
   );
 }
