@@ -71,7 +71,7 @@ export async function contentOverview(deps: Deps, ctx: Ctx, range: { from: strin
     accounts: accountsRaw.map(a => ({ id: a.id, platform: a.platform, name: a.name, handle: a.handle, followers: a.followers, isCompetitor: a.is_competitor, profileUrl: a.profile_url })),
     outliers: outliers.slice(0, 60).map(o => ({ id: o.post.id, accountId: o.account.id, platform: o.post.platform, format: o.post.format, title: (o.post.caption ?? '').split('\n')[0]!.slice(0, 160), postedAt: o.post.postedAt.toISOString(), permalink: o.post.permalink, thumbnailUrl: o.post.thumbnailUrl,
       score: o.score, value: o.value, metric: o.metric, usual: o.usual, ageDays: o.ageDays, themes: o.themes })),
-    patterns, topics, suggestedTopics: topics.length ? [] : DEFAULT_TOPICS[ctx.industry], brandDomain: brandDomains[0] ?? null, usualViewPct, videos,
+    patterns, topics: topics.map(t => ({ ...t, result: typeof t.result === 'string' ? (() => { try { return JSON.parse(t.result as unknown as string); } catch { return null; } })() : t.result })), suggestedTopics: topics.length ? [] : DEFAULT_TOPICS[ctx.industry], brandDomain: brandDomains[0] ?? null, usualViewPct, videos,
   };
 }
 

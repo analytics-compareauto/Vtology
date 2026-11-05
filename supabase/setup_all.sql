@@ -823,6 +823,29 @@ grant select on vt.content_topics to authenticated;
 alter table vt.social_posts add column if not exists retention jsonb;
 alter table vt.social_posts add column if not exists retention_at timestamptz;
 
+-- ===== 20261105000013_repair_json.sql =====
+-- Repair: before this release, the production driver stored JSON values that the server had already
+-- serialised as JSON *strings* (for example "{\"a\":1}" instead of {"a":1}). Turn every such string
+-- back into the value it holds, in every jsonb column of the vt schema. Values that aren't JSON text
+-- are left as they are.
+create or replace function vt_meta_try_jsonb(t text) returns jsonb language plpgsql immutable as $$
+begin return t::jsonb; exception when others then return null; end $$;
+
+do $$
+declare c record;
+begin
+  for c in select table_name, column_name from information_schema.columns
+            where table_schema = 'vt' and data_type = 'jsonb'
+              and table_name in (select table_name from information_schema.tables where table_schema = 'vt' and table_type = 'BASE TABLE')
+  loop
+    execute format(
+      'update vt.%I set %I = vt_meta_try_jsonb(%I #>> ''{}'') where jsonb_typeof(%I) = ''string'' and vt_meta_try_jsonb(%I #>> ''{}'') is not null and (%I #>> ''{}'') ~ ''^\s*[\[{"]''',
+      c.table_name, c.column_name, c.column_name, c.column_name, c.column_name, c.column_name);
+  end loop;
+end $$;
+
+drop function vt_meta_try_jsonb(text);
+
 create schema if not exists vt_meta;
 create table if not exists vt_meta.schema_migrations (id text primary key, applied_at timestamptz not null default now());
-insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth'), ('20261103000009_data_sources'), ('20261105000010_audiences'), ('20261105000011_media'), ('20261105000012_content') on conflict do nothing;
+insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth'), ('20261103000009_data_sources'), ('20261105000010_audiences'), ('20261105000011_media'), ('20261105000012_content'), ('20261105000013_repair_json') on conflict do nothing;

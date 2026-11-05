@@ -27,7 +27,13 @@ export const USER_CONTEXT_SQL = (userId: string) => [
 /** Production driver: postgres.js against the Supabase connection string. */
 export async function createPostgresDb(connectionString: string): Promise<Db> {
   const { default: postgres } = await import('postgres');
-  const client = postgres(connectionString, { prepare: false, max: 5 });
+  // Our code passes JSON columns as text it has already serialised (JSON.stringify), which PGlite reads as
+  // JSON. postgres.js would serialise that text again, storing a JSON string instead of the object; send it as is.
+  const asJson = (x: unknown) => (typeof x === 'string' ? x : JSON.stringify(x));
+  const client = postgres(connectionString, { prepare: false, max: 5, types: {
+    jsonb: { to: 3802, from: [3802], serialize: asJson, parse: (x: string) => JSON.parse(x) },
+    json: { to: 114, from: [114], serialize: asJson, parse: (x: string) => JSON.parse(x) },
+  } as never });
   type Unsafe = { unsafe: (q: string, p?: unknown[]) => Promise<unknown> & { simple: () => Promise<unknown> } };
   const wrap = (tx: Unsafe): Sql => ({
     query: async <T,>(text: string, params: unknown[] = []) => (await tx.unsafe(text, params as never[])) as unknown as T[],
