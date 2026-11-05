@@ -8,3 +8,5 @@ export * from './social';
 export * from './growth';
 export * from './feed';
 export * from './audience';
+export * from './media';
+export * from './media-sample';

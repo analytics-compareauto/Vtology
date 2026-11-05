@@ -745,6 +745,63 @@ create trigger audit_audience_lists after insert or delete on vt.audience_lists 
 drop trigger if exists audit_audience_exports on vt.audience_exports;
 create trigger audit_audience_exports after insert on vt.audience_exports for each row execute function vt.audit();
 
+-- ===== 20261105000011_media.sql =====
+-- Media reports: delivery data exported from a DSP (DV360 first), for awareness analysis of CTV,
+-- audio, online video and display. Campaign numbers only: no personal data.
+create table if not exists vt.media_reports (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references vt.tenants(id) on delete cascade,
+  name text not null,
+  source text not null default 'dv360',
+  currency text not null default '',
+  status text not null default 'uploading' check (status in ('uploading', 'ready')),
+  rows int not null default 0,
+  date_from date,
+  date_to date,
+  columns jsonb not null default '{}',
+  created_by uuid,
+  created_at timestamptz not null default now(),
+  unique (tenant_id, name)
+);
+
+create table if not exists vt.media_rows (
+  id bigint generated always as identity primary key,
+  tenant_id uuid not null references vt.tenants(id) on delete cascade,
+  report_id uuid not null references vt.media_reports(id) on delete cascade,
+  day date not null,
+  campaign text not null default '',
+  line_item text not null default '',
+  line_item_type text not null default '',
+  channel text not null check (channel in ('ctv', 'audio', 'video', 'display')),
+  creative text not null default '',
+  exchange text not null default '',
+  supply text not null default 'Open auction',
+  deal boolean not null default false,
+  site text not null default '',
+  device text not null default '',
+  region text not null default '',
+  impressions numeric not null default 0,
+  clicks numeric not null default 0,
+  cost numeric not null default 0,
+  viewable numeric not null default 0,
+  measurable numeric not null default 0,
+  starts numeric not null default 0,
+  q1 numeric not null default 0,
+  q2 numeric not null default 0,
+  q3 numeric not null default 0,
+  completes numeric not null default 0,
+  audible numeric not null default 0,
+  conversions numeric not null default 0
+);
+create index if not exists media_rows_tenant_day on vt.media_rows (tenant_id, day);
+create index if not exists media_rows_report on vt.media_rows (report_id);
+
+alter table vt.media_reports enable row level security;
+alter table vt.media_rows enable row level security;
+create policy media_reports_read on vt.media_reports for select to authenticated using (vt.member_role(tenant_id) in ('data_steward', 'marketing_head', 'finance'));
+create policy media_rows_read on vt.media_rows for select to authenticated using (vt.member_role(tenant_id) in ('data_steward', 'marketing_head', 'finance'));
+grant select on vt.media_reports, vt.media_rows to authenticated;
+
 create schema if not exists vt_meta;
 create table if not exists vt_meta.schema_migrations (id text primary key, applied_at timestamptz not null default now());
-insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth'), ('20261103000009_data_sources'), ('20261105000010_audiences') on conflict do nothing;
+insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth'), ('20261103000009_data_sources'), ('20261105000010_audiences'), ('20261105000011_media') on conflict do nothing;

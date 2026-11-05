@@ -11,6 +11,7 @@ export const IconApprovals = I(<><path d="M9 11l2.5 2.5L16 9" /><rect x="3.5" y=
 export const IconData = I(<><ellipse cx="12" cy="6" rx="7.5" ry="2.8" /><path d="M4.5 6v6c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8V6M4.5 12v6c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8v-6" /></>);
 export const IconGrowth = I(<><path d="M3 17l6-6 4 4 8-8" /><path d="M15 7h6v6" /></>);
 export const IconAudience = I(<><circle cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="4.5" /><circle cx="12" cy="12" r="1" fill="currentColor" /></>);
+export const IconMedia = I(<><rect x="3" y="5" width="18" height="12" rx="2.5" /><path d="M8 21h8M12 17v4" /><path d="M10.5 8.5v5l4-2.5z" fill="currentColor" /></>);
 export const IconUp = I(<path d="M5 15l7-7 7 7" />);
 export const IconDown = I(<path d="M5 9l7 7 7-7" />);
 export const IconSpark = I(<><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6" /></>);

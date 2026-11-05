@@ -14,6 +14,7 @@ import { schemaReady } from './schema';
 import { startConnect, finishConnect, socialOverview, syncTenant, syncAll, syncConnection, disconnect, growthOverview, addCompetitor, removeCompetitor } from './social';
 import { ROLES, type RoleCode } from '@vtology/core';
 import { listSources, createSource, updateSource, deleteSource, syncSource, syncTenantSources, dueSources } from './sources';
+import { listReports, createReport, appendMediaRows, finishReport, deleteReport, mediaOverview } from './media';
 import { listAudiences, createList, appendRows, finishList, deleteList, createBucket, updateBucket, previewBucket, deleteBucket, computeBucket, exportBucket, purgeAllExpired } from './audiences';
 
 const MappingSchema = z.object({
@@ -112,6 +113,16 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
         if (!['marketing_head', 'data_steward', 'sales_ops'].includes(ctx.role)) throw new HttpError(403, 'Your role cannot sync data sources.');
         return json(200, await syncSource(deps, ctx.tenantId, ss[2]!));
       }
+    }
+    // ---- media: DSP delivery reports for awareness analysis (CTV, audio, video, display)
+    if (route === 'GET media') return json(200, await mediaOverview(ctx, rangeParam(url, ctx.now, 30), { channel: url.searchParams.get('channel'), report: url.searchParams.get('report') }));
+    if (route === 'GET media/reports') return json(200, await listReports(ctx));
+    if (route === 'POST media/reports') return json(201, await createReport(ctx, await req.json().catch(() => ({}))));
+    const mr = route.match(/^(POST|DELETE) media\/reports\/([0-9a-f-]{36})(?:\/(rows|finish))?$/);
+    if (mr) {
+      if (mr[1] === 'POST' && mr[3] === 'rows') return json(200, await appendMediaRows(ctx, mr[2]!, await req.json().catch(() => ({}))));
+      if (mr[1] === 'POST' && mr[3] === 'finish') return json(200, await finishReport(ctx, mr[2]!));
+      if (mr[1] === 'DELETE' && !mr[3]) return json(200, await deleteReport(ctx, mr[2]!));
     }
     // ---- audiences: hashed lists, buckets with holdouts, logged exports
     if (route === 'GET audiences') return json(200, await listAudiences(ctx));
