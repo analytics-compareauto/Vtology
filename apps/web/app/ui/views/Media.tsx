@@ -51,7 +51,7 @@ function Kpi({ label, now, before, fmt, lowerIsBetter, sub }: { label: string; n
   );
 }
 
-export function Media({ workspaceId, notify, range, onRange, canEdit }: { workspaceId: string; notify: (m: string) => void; range: Range; onRange: (r: Range) => void; canEdit: boolean }) {
+export function Media({ workspaceId, notify, range, onRange, canEdit, embedded, onAdd }: { workspaceId: string; notify: (m: string) => void; range: Range; onRange: (r: Range) => void; canEdit: boolean; embedded?: boolean; onAdd?: () => void }) {
   const T = `/tenants/${workspaceId}`;
   const [channel, setChannel] = useState<Channel | 'all'>('all');
   const [report, setReport] = useState<string>('');
@@ -78,7 +78,7 @@ export function Media({ workspaceId, notify, range, onRange, canEdit }: { worksp
       {!importing && <div className="empty" style={{ display: 'grid', gap: 12, justifyItems: 'center' }}>
         <b style={{ color: 'var(--ink)', fontSize: 16 }}>Bring in a delivery report from DV360 or another DSP</b>
         <span>CTV, audio and video awareness campaigns are judged here on attention: completion, viewability, cost per completed view and the supply behind them. Reports hold campaign numbers only, no personal data.</span>
-        {canEdit ? <div className="toolbar"><button className="btn primary" onClick={() => setImporting(true)}>Import a report</button><SampleReport /></div> : <span className="small">Marketing heads and data stewards can import reports.</span>}
+        {canEdit ? <div className="toolbar"><button className="btn primary" onClick={() => (onAdd ? onAdd() : setImporting(true))}>Import a report</button><SampleReport /></div> : <span className="small">Marketing heads and data stewards can import reports.</span>}
       </div>}
     </div>
   );
@@ -113,14 +113,14 @@ export function Media({ workspaceId, notify, range, onRange, canEdit }: { worksp
     <div style={{ display: 'grid', gap: 20 }}>
       <div className="toolbar no-print" style={{ justifyContent: 'space-between' }}>
         <div className="toolbar">
-          <DateRangePicker value={range} onChange={onRange} />
+          {!embedded && <DateRangePicker value={range} onChange={onRange} />}
           <div className="seg" role="group" aria-label="Channel">
             <button aria-pressed={channel === 'all'} onClick={() => setChannel('all')}>All channels</button>
             {presentChannels.map(c => <button key={c} aria-pressed={channel === c} onClick={() => setChannel(c)}>{CHANNEL_LABEL[c]}</button>)}
           </div>
           {ready.filter(r => r.kind !== 'reach').length > 1 && <select className="input" style={{ width: 'auto' }} value={report} onChange={e => setReport(e.target.value)} aria-label="Report"><option value="">All reports</option>{ready.filter(r => r.kind !== 'reach').map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>}
         </div>
-        {canEdit && !importing && <button className="btn" onClick={() => setImporting(true)}>Import a report</button>}
+        {canEdit && !importing && !embedded && <button className="btn" onClick={() => setImporting(true)}>Import a report</button>}
       </div>
       {importer}
       {d.mixed && <div className="note-box">These reports are in different currencies ({d.currencies.join(', ')}), so they can't be added together. Choose one report above.</div>}
@@ -213,12 +213,14 @@ export function Media({ workspaceId, notify, range, onRange, canEdit }: { worksp
         </>
       )}
 
+      {!embedded && (
       <section className="panel">
         <div className="panel-head"><div><h2>Reports</h2><p>Each import is kept as it arrived. Two reports covering the same days would count the same delivery twice, so keep one per flight.</p></div></div>
         <Table head={['Report', 'Dates', 'Rows', 'Currency', '']} rows={d.reports.map(r => [<b key="n">{r.name}{r.status !== 'ready' && <span className="tag warn" style={{ marginLeft: 8 }}>Import not finished</span>}</b>,
           r.date_from ? rangeText({ from: r.date_from, to: r.date_to }) : '–', num(r.rows), r.currency || '–',
           canEdit ? <button key="x" className="btn small danger" onClick={async () => { if (!window.confirm(`Delete ${r.name}?`)) return; await api('DELETE', `${T}/media/reports/${r.id}`); notify(`Deleted ${r.name}.`); load(); }}>Delete</button> : ''])} />
       </section>
+      )}
     </div>
   );
 }
@@ -412,7 +414,7 @@ function explain(e: unknown, rows: number): string {
   return e.message;
 }
 
-function ImportReport({ T, onDone }: { T: string; onDone: (msg: string | null, coverage?: { from: string; to: string }) => void }) {
+export function ImportReport({ T, onDone, initialFile }: { T: string; onDone: (msg: string | null, coverage?: { from: string; to: string }) => void; initialFile?: File }) {
   const [name, setName] = useState('');
   const [currency, setCurrency] = useState('');
   const [reading, setReading] = useState<number | null>(null);
@@ -422,6 +424,7 @@ function ImportReport({ T, onDone }: { T: string; onDone: (msg: string | null, c
   const [err, setErr] = useState<string | null>(null);
   const [over, setOver] = useState(false);
 
+  useEffect(() => { if (initialFile) choose(initialFile); }, [initialFile]); // eslint-disable-line react-hooks/exhaustive-deps
   async function choose(f0: File | undefined) {
     setErr(null); setParsed(null);
     if (!f0) return;

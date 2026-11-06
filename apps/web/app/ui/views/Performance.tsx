@@ -28,7 +28,7 @@ function money(currency: string) {
   };
 }
 
-export function Performance({ workspaceId, notify, range, onRange }: { workspaceId: string; notify: (m: string) => void; range: Range; onRange: (r: Range) => void }) {
+export function Performance({ workspaceId, notify, range, onRange, embedded }: { workspaceId: string; notify: (m: string) => void; range: Range; onRange: (r: Range) => void; embedded?: boolean }) {
   const T = `/tenants/${workspaceId}`;
   const [d, setD] = useState<Data | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -44,11 +44,11 @@ export function Performance({ workspaceId, notify, range, onRange }: { workspace
 
   return (
     <div style={{ display: 'grid', gap: 20 }}>
-      <div className="toolbar no-print">
+      {!embedded && <div className="toolbar no-print">
         <DateRangePicker value={range} onChange={onRange} />
         {d.canEdit && <button className="btn primary" onClick={() => setAdding(a => !a)}>{adding ? 'Close' : 'Add a Google Ads or Meta report'}</button>}
-      </div>
-      {(adding || (!d.reports.length && d.canEdit)) && <ImportPerf T={T} onDone={msg => { if (msg) notify(msg); setAdding(false); load(); }} />}
+      </div>}
+      {!embedded && (adding || (!d.reports.length && d.canEdit)) && <ImportPerf T={T} onDone={msg => { if (msg) notify(msg); setAdding(false); load(); }} />}
 
       {!has ? (
         <section className="panel"><div className="empty">{d.reports.length ? 'No campaign spend in these dates. Try a longer range.' : 'Add a Google Ads campaign report (with Day), a search terms report, or a Meta Ads Manager export. Vtology shows where the money converts, where it is wasted, and next month’s plan at the same budget.'}</div></section>
@@ -121,7 +121,7 @@ export function Performance({ workspaceId, notify, range, onRange }: { workspace
         </>
       )}
 
-      {d.reports.length > 0 && (
+      {!embedded && d.reports.length > 0 && (
         <section className="panel">
           <div className="panel-head"><div><h2>Reports added</h2><p>Only daily totals per campaign and ad group, and search terms, are kept.</p></div></div>
           <div className="rows">{d.reports.map(r => (
@@ -165,7 +165,7 @@ async function fileText(f: File): Promise<string> {
   return new TextDecoder('utf-8').decode(buf).replace(/^﻿/, '');
 }
 
-function ImportPerf({ T, onDone }: { T: string; onDone: (msg: string | null) => void }) {
+export function ImportPerf({ T, onDone, initialFile }: { T: string; onDone: (msg: string | null) => void; initialFile?: File }) {
   const [name, setName] = useState('');
   const [raw, setRaw] = useState<Record<string, string>[] | null>(null);
   const [cols, setCols] = useState<PerfColumns>({});
@@ -179,6 +179,7 @@ function ImportPerf({ T, onDone }: { T: string; onDone: (msg: string | null) => 
   const parsed = useMemo(() => (raw ? toPerfRows(raw, cols, platform) : null), [raw, cols, platform]);
   const problem = !raw ? null : !cols.cost ? 'Choose the cost column.' : kind === 'campaigns' && !cols.day ? 'This report has no Day column. In Google Ads add Segment → Time → Day (in Meta, Breakdown → By time → Day) and download again; a search terms report doesn’t need it.' : !cols.campaign && !cols.term ? 'Choose the campaign column.' : null;
 
+  useEffect(() => { if (initialFile) choose(initialFile); }, [initialFile]); // eslint-disable-line react-hooks/exhaustive-deps
   async function choose(f0: File | undefined) {
     setErr(null); setRaw(null);
     if (!f0) return;

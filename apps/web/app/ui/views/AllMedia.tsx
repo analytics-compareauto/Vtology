@@ -5,18 +5,21 @@ import { gunzipSync, unzipSync } from 'fflate';
 import { readXlsx } from '../xlsx';
 import { api, ApiError } from '../api';
 import { BarChart } from '../charts';
-import { DateRangePicker, presetRange, rangeQuery, type Range } from '../DateRange';
+
 import { compact, pct } from '../format';
 
 interface Total { medium: string; label: string; kind: 'offline' | 'digital'; spend: number; reach: number; units: number; weeks: number }
 interface Lift { medium: string; label: string; spend: number; weeksOn: number; weeksOff: number; on: number | null; off: number | null; lift: number | null; extra: number | null; costPerExtra: number | null; overlap: number; verdict: 'lift' | 'none' | 'too_few_weeks' }
 interface Region { region: string; results: number; spend: number; resultShare: number; spendShare: number; byMedium: Record<string, number> }
 interface Finding { tone: 'good' | 'bad' | 'neutral'; title: string; detail: string; action?: string; figure?: string; figureLabel?: string }
-interface Report { id: string; name: string; medium: OfflineMedium; currency: string; status: string; rows: number; date_from: string | null; date_to: string | null }
-interface Data { currency: string; leftOut: string[]; measure: 'leads' | 'sales'; hasResults: boolean; hasDigital: boolean; weeks: string[]; series: { medium: string; label: string; values: number[] }[]; results: number[]; totals: Total[]; lifts: Lift[]; regions: Region[]; findings: Finding[]; reports: Report[]; canEdit: boolean }
+export interface Report { id: string; name: string; medium: OfflineMedium; currency: string; status: string; rows: number; date_from: string | null; date_to: string | null }
+interface Glance { medium: string; label: string; group: string; tab: string; spend: number; did: string; measure: string; verdict: 'add' | 'keep' | 'cut' | 'test' | 'unknown' }
+interface Picture { spend: number; results: number; perResult: number | null; resultsFrom: 'file' | 'platforms' | 'none'; glance: Glance[]; next: { tone: 'good' | 'bad' | 'neutral'; text: string; tab: string }[] }
+interface Data { picture: Picture; currency: string; leftOut: string[]; measure: 'leads' | 'sales'; hasResults: boolean; hasDigital: boolean; weeks: string[]; series: { medium: string; label: string; values: number[] }[]; results: number[]; totals: Total[]; lifts: Lift[]; regions: Region[]; findings: Finding[]; reports: Report[]; canEdit: boolean }
 
 /** one colour per medium, kept the same wherever it appears */
-export const MEDIUM_COLOR: Record<string, string> = { tv: '#3b5bdb', print: '#e8590c', radio: '#2f9e44', ooh: '#ae3ec9', ctv: '#1098ad', video: '#f59f00', audio: '#74b816', display: '#868e96' };
+export const MEDIUM_COLOR: Record<string, string> = { tv: '#3b5bdb', print: '#e8590c', radio: '#2f9e44', ooh: '#ae3ec9', ctv: '#1098ad', video: '#f59f00', audio: '#74b816', display: '#868e96', 'perf:Search': '#364fc7', 'perf:Performance Max': '#7048e8', 'perf:YouTube': '#e03131', 'perf:Display': '#a61e4d', 'perf:Demand Gen': '#f76707', 'perf:Shopping': '#37b24d', 'perf:Meta': '#1c7ed6' };
+const VERDICT: Record<Glance['verdict'], { text: string; tone: string }> = { add: { text: 'Put more in', tone: 'ok' }, keep: { text: 'Keep', tone: 'flow' }, cut: { text: 'Cut or move', tone: 'leak' }, test: { text: 'Test', tone: 'plain' }, unknown: { text: 'Needs results', tone: 'plain' } };
 const REACH_NAME: Record<string, string> = { tv: 'GRPs', print: 'readership', radio: 'listeners', ooh: 'footfall', ctv: 'impressions', video: 'impressions', audio: 'impressions', display: 'impressions' };
 const short = (w: string) => new Date(`${w}T00:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
 
@@ -27,115 +30,164 @@ function money(currency: string) {
   };
 }
 
-export function AllMedia({ workspaceId, notify }: { workspaceId: string; notify: (m: string) => void }) {
-  const T = `/tenants/${workspaceId}`;
-  const [range, setRange] = useState<Range>(() => presetRange('last180'));
-  const [d, setD] = useState<Data | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
-  const load = useCallback(() => api<Data>('GET', `${T}/crossmedia?${rangeQuery(range)}`).then(r => { setD(r); setErr(null); }).catch(e => setErr(e instanceof ApiError ? e.message : 'Could not load media.')), [T, range]);
-  useEffect(() => { load(); }, [load]);
-  if (err) return <div className="error-box" role="alert">{err}</div>;
-  if (!d) return <div className="progress" />;
+export interface Chain {
+  aware: { spend: number; media: { medium: string; label: string; spend: number }[]; grps: number; readers: number; impressions: number; completes: number };
+  look: { burst: string; brandOn: number; brandOff: number; cpaOn: number | null; cpaOff: number | null } | null;
+  lead: { medium: string; lift: number | null } | null;
+  convert: { spend: number; media: { medium: string; label: string; spend: number }[]; results: number; perResult: number | null; platformConversions: number | null; platformCpa: number | null };
+}
+export interface Shared { mainline: boolean; results: boolean; programmatic: boolean; search: boolean; meta: boolean; terms: boolean }
+export type MediaData = Data & { picture: Picture & { chain: Chain; shared: Shared } };
+export type MediaView = 'summary' | 'awareness' | 'search' | 'files';
+
+/** The summary (and the awareness part) of the Media tab, from data the Media tab loads once. */
+export function MediaSummary({ d, part, onView }: { d: MediaData; part: 'summary' | 'awareness'; onView: (v: MediaView) => void }) {
   const fm = money(d.currency);
-  const total = d.totals.reduce((a, t) => a + t.spend, 0);
   const unit = d.measure;
-  const empty = !d.totals.length && !d.hasResults;
-
-  return (
-    <div style={{ display: 'grid', gap: 20 }}>
-      <div className="toolbar no-print">
-        <DateRangePicker value={range} onChange={setRange} />
-        {d.canEdit && <button className="btn primary" onClick={() => setAdding(a => !a)}>{adding ? 'Close' : 'Add TV, print, radio or results'}</button>}
-      </div>
-      {adding && <ImportOffline T={T} onDone={msg => { if (msg) notify(msg); setAdding(false); load(); }} />}
-
-      {empty ? (
-        <section className="panel"><div className="empty">
-          Add your TV, print, radio or outdoor reports, and a results file (leads, bookings or sales by week and city). Digital campaigns imported on the Media tab appear here on their own.
-          Vtology lines them all up week by week and shows which media moved your results, and where.
-        </div></section>
-      ) : (
-        <>
-          <section className="panel">
-            <div className="panel-head"><div><h2>Where the money went</h2><p>Every medium in these dates, in {d.currency}.{d.leftOut.length ? ` Reports in ${d.leftOut.join(', ')} are left out of the comparison.` : ''}{!d.hasDigital ? ' Digital campaigns imported on the Media tab appear here too.' : ''}</p></div></div>
-            {total > 0 && <>
-              <div className="split-bar">{d.totals.map(t => <i key={t.medium} style={{ width: `${(t.spend / total) * 100}%`, background: MEDIUM_COLOR[t.medium] ?? 'var(--muted)' }} title={`${t.label}: ${fm(t.spend)}`} />)}</div>
-              <div className="medium-tiles">{d.totals.map(t => (
-                <div key={t.medium} className="medium-tile">
-                  <span className="dot" style={{ background: MEDIUM_COLOR[t.medium] ?? 'var(--muted)' }} /><b>{t.label}</b>
-                  <span className="big">{fm(t.spend)}</span>
-                  <span className="small muted">{pct(t.spend / total)} of spend · {t.weeks} {t.weeks === 1 ? 'week' : 'weeks'}{t.reach ? ` · ${compact(t.reach)} ${REACH_NAME[t.medium] ?? 'reach'}` : ''}</span>
-                </div>
-              ))}</div>
-            </>}
-          </section>
-
-          <section className="panel">
-            <div className="panel-head"><div><h2>Week by week: spend and {unit}</h2><p>Spend by medium on top, {unit} below, on the same weeks, so you can see what moved when each medium ran.</p></div></div>
-            <WeeklyStack weeks={d.weeks} series={d.series} fm={fm} />
-            {d.hasResults ? <BarChart x={d.weeks} values={d.results} height={150} color="var(--ink-2)" xFormat={short} label={unit} />
-              : <div className="note-box" style={{ marginTop: 10 }}>Add a results file (leads, bookings or sales by week, ideally by city) to see what each medium did for them.</div>}
-          </section>
-
-          {d.findings.length > 0 && (
-            <section className="panel">
-              <div className="panel-head"><div><h2>What it means</h2><p>Each medium compared with itself: {unit} a week when it ran against when it didn’t. Offline media have no clicks, so this is lift, not exact credit.</p></div></div>
-              <div className="insight-grid">{d.findings.map((f, i) => <Card key={i} f={f} />)}</div>
-            </section>
-          )}
-
-          {d.hasResults && d.lifts.length > 0 && (
-            <section className="panel">
-              <div className="panel-head"><div><h2>Each medium: {unit} a week with it and without it</h2><p>The darker bar is weeks it ran; the lighter, weeks it didn’t.</p></div></div>
-              <div className="lift-rows">{d.lifts.map(l => {
-                const max = Math.max(...d.lifts.flatMap(x => [x.on ?? 0, x.off ?? 0]), 1);
-                return (
-                  <div className="lift-row" key={l.medium}>
-                    <span><span className="dot" style={{ background: MEDIUM_COLOR[l.medium] ?? 'var(--muted)' }} /><b>{l.label}</b></span>
-                    <span className="lift-bars">
-                      <span><i style={{ width: `${((l.on ?? 0) / max) * 100}%`, background: MEDIUM_COLOR[l.medium] }} /><em>{l.on !== null ? Math.round(l.on) : '–'} with ({l.weeksOn} wk)</em></span>
-                      <span><i style={{ width: `${((l.off ?? 0) / max) * 100}%`, background: MEDIUM_COLOR[l.medium], opacity: 0.35 }} /><em>{l.off !== null ? Math.round(l.off) : '–'} without ({l.weeksOff} wk)</em></span>
-                    </span>
-                    <span className={`tag ${l.verdict === 'lift' ? 'ok' : l.verdict === 'none' ? 'leak' : 'plain'}`}>{l.verdict === 'lift' ? `+${Math.round(l.lift! * 100)}%` : l.verdict === 'none' ? 'No clear rise' : 'Too few weeks'}</span>
-                    <span className="small muted">{l.costPerExtra ? `${fm(l.costPerExtra)} per extra ${unit.slice(0, -1)}` : ''}</span>
-                  </div>
-                );
-              })}</div>
-            </section>
-          )}
-
-          {d.regions.length > 0 && (
-            <section className="panel">
-              <div className="panel-head"><div><h2>Where media ran, against where {unit} came from</h2><p>Share of regional spend (top bar) against share of {unit} (bottom bar), by city or state. National buys are left out here.</p></div></div>
-              <div className="region-rows">{d.regions.map(r => (
-                <div className="region-row" key={r.region}>
-                  <b className="clamp1">{r.region}</b>
-                  <span className="region-bars">
-                    <span className="seg-bar" title={`${pct(r.spendShare)} of regional spend`}>{Object.entries(r.byMedium).map(([m, v]) => <i key={m} style={{ width: `${(v / (d.regions.reduce((a, x) => a + x.spend, 0) || 1)) * 100}%`, background: MEDIUM_COLOR[m] }} />)}</span>
-                    <span className="seg-bar" title={`${pct(r.resultShare)} of ${unit}`}><i style={{ width: `${r.resultShare * 100}%`, background: 'var(--ink-2)' }} /></span>
-                  </span>
-                  <span className="small">{pct(r.spendShare)} spend · <b>{pct(r.resultShare)}</b> {unit}</span>
-                </div>
-              ))}</div>
-            </section>
-          )}
-        </>
-      )}
-
-      {d.reports.length > 0 && (
+  const p = d.picture;
+  if (part === 'awareness') {
+    const aware = d.totals.filter(t => p.chain.aware.media.some(m => m.medium === t.medium) && !t.medium.startsWith('perf:') && !['ctv', 'video', 'audio', 'display'].includes(t.medium));
+    const total = aware.reduce((a, t) => a + t.spend, 0);
+    const awareLifts = d.findings.filter(f => !/region|Spend is heavy/i.test(f.title));
+    if (!aware.length) return null;
+    return (
+      <>
         <section className="panel">
-          <div className="panel-head"><div><h2>Files added</h2><p>Only daily totals are kept; the file itself isn’t stored.</p></div></div>
-          <div className="rows">{d.reports.map(r => (
-            <div className="row" key={r.id}>
-              <div className="row-main"><span><b>{r.name}</b> <span className="tag plain">{OFFLINE_LABEL[r.medium]}</span></span>
-                {d.canEdit && <button className="btn small link" onClick={async () => { if (!window.confirm(`Delete "${r.name}"? Its numbers leave every view.`)) return; await api('DELETE', `${T}/crossmedia/reports/${r.id}`); load(); }}>Delete</button>}</div>
-              <span className="small muted">{r.status === 'ready' ? `${r.rows.toLocaleString('en-IN')} daily totals, ${r.date_from?.slice(0, 10)} to ${r.date_to?.slice(0, 10)}` : 'Upload did not finish'}</span>
+          <div className="panel-head"><div><h2>TV, print, radio and outdoor</h2><p>What each bought, in {d.currency}. Judged on how {unit} moved in the weeks it ran.</p></div></div>
+          <div className="split-bar">{aware.map(t => <i key={t.medium} style={{ width: `${(t.spend / (total || 1)) * 100}%`, background: MEDIUM_COLOR[t.medium] ?? 'var(--muted)' }} title={`${t.label}: ${fm(t.spend)}`} />)}</div>
+          <div className="medium-tiles">{aware.map(t => (
+            <div key={t.medium} className="medium-tile">
+              <span><span className="dot" style={{ background: MEDIUM_COLOR[t.medium] ?? 'var(--muted)' }} /><b>{t.label}</b></span>
+              <span className="big">{fm(t.spend)}</span>
+              <span className="small muted">{t.weeks} {t.weeks === 1 ? 'week' : 'weeks'}{t.reach ? ` · ${compact(t.reach)} ${REACH_NAME[t.medium] ?? 'reach'}` : ''}{t.units ? ` · ${compact(t.units)} ${t.medium === 'print' ? 'insertions' : t.medium === 'ooh' ? 'sites' : 'spots'}` : ''}</span>
+            </div>
+          ))}</div>
+        </section>
+        {awareLifts.length > 0 && <section className="panel"><div className="panel-head"><div><h2>What they did</h2><p>{unit[0]!.toUpperCase() + unit.slice(1)} a week when each ran against when it didn’t: lift, not exact credit, since offline media have no clicks.</p></div></div>
+          <div className="insight-grid">{awareLifts.map((f, i) => <Card key={i} f={f} />)}</div></section>}
+      </>
+    );
+  }
+  return (
+    <>
+      <ChainView c={p.chain} fm={fm} unit={p.resultsFrom === 'platforms' ? 'online conversions' : unit} resultsFrom={p.resultsFrom} onView={onView} shared={p.shared} />
+      <Glance p={p} fm={fm} onView={onView} />
+      {d.weeks.length > 1 && (
+        <section className="panel">
+          <div className="panel-head"><div><h2>Week by week</h2><p>Spend by medium on top, {p.resultsFrom === 'platforms' ? 'online conversions' : unit} below, on the same weeks.</p></div></div>
+          <WeeklyStack weeks={d.weeks} series={d.series} fm={fm} />
+          {d.hasResults && <BarChart x={d.weeks} values={d.results} height={140} color="var(--ink-2)" xFormat={short} label={unit} />}
+        </section>
+      )}
+      {d.hasResults && d.lifts.length > 0 && (
+        <section className="panel">
+          <div className="panel-head"><div><h2>Each awareness medium: {unit} a week with it and without it</h2><p>The darker bar is weeks it ran; the lighter, weeks it didn’t.</p></div></div>
+          <div className="lift-rows">{d.lifts.map(l => {
+            const max = Math.max(...d.lifts.flatMap(x => [x.on ?? 0, x.off ?? 0]), 1);
+            return (
+              <div className="lift-row" key={l.medium}>
+                <span><span className="dot" style={{ background: MEDIUM_COLOR[l.medium] ?? 'var(--muted)' }} /><b>{l.label}</b></span>
+                <span className="lift-bars">
+                  <span><i style={{ width: `${((l.on ?? 0) / max) * 100}%`, background: MEDIUM_COLOR[l.medium] }} /><em>{l.on !== null ? Math.round(l.on) : '–'} with ({l.weeksOn} wk)</em></span>
+                  <span><i style={{ width: `${((l.off ?? 0) / max) * 100}%`, background: MEDIUM_COLOR[l.medium], opacity: 0.35 }} /><em>{l.off !== null ? Math.round(l.off) : '–'} without ({l.weeksOff} wk)</em></span>
+                </span>
+                <span className={`tag ${l.verdict === 'lift' ? 'ok' : l.verdict === 'none' ? 'leak' : 'plain'}`}>{l.verdict === 'lift' ? `+${Math.round(l.lift! * 100)}%` : l.verdict === 'none' ? 'No clear rise' : 'Too few weeks'}</span>
+                <span className="small muted">{l.costPerExtra ? `${fm(l.costPerExtra)} per extra ${unit.slice(0, -1)}` : ''}</span>
+              </div>
+            );
+          })}</div>
+        </section>
+      )}
+      {d.regions.length > 0 && (
+        <section className="panel">
+          <div className="panel-head"><div><h2>Where media ran, against where {unit} came from</h2><p>Share of regional spend (top bar) against share of {unit} (bottom bar). National buys are left out here.</p></div></div>
+          <div className="region-rows">{d.regions.map(r => (
+            <div className="region-row" key={r.region}>
+              <b className="clamp1">{r.region}</b>
+              <span className="region-bars">
+                <span className="seg-bar" title={`${pct(r.spendShare)} of regional spend`}>{Object.entries(r.byMedium).map(([m, v]) => <i key={m} style={{ width: `${(v / (d.regions.reduce((a, x) => a + x.spend, 0) || 1)) * 100}%`, background: MEDIUM_COLOR[m] }} />)}</span>
+                <span className="seg-bar" title={`${pct(r.resultShare)} of ${unit}`}><i style={{ width: `${r.resultShare * 100}%`, background: 'var(--ink-2)' }} /></span>
+              </span>
+              <span className="small">{pct(r.spendShare)} spend · <b>{pct(r.resultShare)}</b> {unit}</span>
             </div>
           ))}</div>
         </section>
       )}
+    </>
+  );
+}
+
+const pctChange = (a: number, b: number) => (b > 0 ? (a - b) / b : null);
+
+/** Aware → look for you → lead or sale: the money at each step, what it bought, and what moved between them. */
+function ChainView({ c, fm, unit, resultsFrom, onView, shared }: { c: Chain; fm: (v: number) => string; unit: string; resultsFrom: string; onView: (v: MediaView) => void; shared: Shared }) {
+  const hasAwareOffline = shared.mainline || shared.programmatic;
+  const brandUp = c.look ? pctChange(c.look.brandOn, c.look.brandOff) : null;
+  const cpaDown = c.look && c.look.cpaOn && c.look.cpaOff ? pctChange(c.look.cpaOn, c.look.cpaOff) : null;
+  const reach = [c.aware.grps ? `${compact(c.aware.grps)} TV GRPs` : '', c.aware.readers ? `${compact(c.aware.readers)} readers and listeners` : '', c.aware.impressions ? `${compact(c.aware.impressions)} digital impressions` : '', c.aware.completes ? `${compact(c.aware.completes)} completed views` : ''].filter(Boolean);
+  const Stage = ({ n, title, children, cls }: { n: number; title: string; children: React.ReactNode; cls: string }) => (
+    <div className={`chain-stage ${cls}`}><span className="chain-n">{n}</span><span className="chain-title">{title}</span>{children}</div>
+  );
+  const Chips = ({ media, total }: { media: Chain['aware']['media']; total: number }) => (
+    <div className="chain-chips">
+      <div className="split-bar thin">{media.map(m => <i key={m.medium} style={{ width: `${(m.spend / (total || 1)) * 100}%`, background: MEDIUM_COLOR[m.medium] ?? 'var(--muted)' }} title={`${m.label}: ${fm(m.spend)}`} />)}</div>
+      <div className="chain-legend">{media.slice(0, 8).map(m => <span key={m.medium} title={`${m.label}: ${fm(m.spend)}`}><i style={{ background: MEDIUM_COLOR[m.medium] ?? 'var(--muted)' }} />{m.label.replace(/ \(.*\)$/, '')}<b>{pct(m.spend / (total || 1))}</b></span>)}{media.length > 8 && <span className="muted">+{media.length - 8} more</span>}</div>
     </div>
+  );
+  return (
+    <section className="panel chain">
+      <div className="panel-head"><div><h2>How your money moved people</h2><p>Every medium has a job: make people aware of you, make them look for you, or get the lead or sale. Here is what each step cost and what it did for the next.</p></div></div>
+      <div className="chain-row">
+        <Stage n={1} title="Make people aware" cls="s1">
+          <b className="chain-big">{c.aware.spend ? fm(c.aware.spend) : '–'}</b>
+          {c.aware.media.length ? <Chips media={c.aware.media} total={c.aware.spend} /> : <button className="btn small" onClick={() => onView('files')}>Add TV, print, DV360 or YouTube reports</button>}
+          {reach.length > 0 && <span className="small muted">{reach.join(' · ')}</span>}
+        </Stage>
+        <div className="chain-link">{brandUp !== null && c.look ? <><b className={brandUp >= 0 ? 'up' : 'down'}>{brandUp >= 0 ? '+' : '−'}{Math.round(Math.abs(brandUp) * 100)}%</b><span>brand searches in {c.look.burst} weeks</span></> : <span className="muted">{!shared.search ? 'Add Google Ads to see searches rise' : !hasAwareOffline ? 'Add TV, print or video to see searches rise' : ''}</span>}</div>
+        <Stage n={2} title="Make them look for you" cls="s2">
+          {c.look ? <><b className="chain-big">{compact(c.look.brandOn)}</b><span className="small">brand searches clicked a week in {c.look.burst} weeks, against {compact(c.look.brandOff)} without</span></>
+            : <span className="small muted">{!shared.search ? 'Brand searches rise when awareness media run. Add a Google Ads report (with your brand campaigns) to see by how much.' : !hasAwareOffline ? 'Brand searches rise when TV, print, radio, outdoor or video run. Add those reports to see by how much, and which medium does it best.' : 'Your awareness media ran almost every week, so there are no weeks without them to compare against.'}</span>}
+        </Stage>
+        <div className="chain-link">{cpaDown !== null && c.look ? <><b className={cpaDown <= 0 ? 'up' : 'down'}>{cpaDown <= 0 ? '−' : '+'}{Math.round(Math.abs(cpaDown) * 100)}%</b><span>cost per online lead in {c.look.burst} weeks</span></> : c.lead && c.lead.lift ? <><b className="up">+{Math.round(c.lead.lift * 100)}%</b><span>{unit} in {c.lead.medium} weeks</span></> : null}</div>
+        <Stage n={3} title="Get the lead or sale" cls="s3">
+          <b className="chain-big">{c.convert.results ? Math.round(c.convert.results).toLocaleString('en-IN') : '–'}</b>
+          <span className="small">{c.convert.results ? `${unit}${c.convert.perResult ? `, ${fm(c.convert.perResult)} each across all media` : ''}` : resultsFrom === 'none' ? 'Add your leads or sales, or a Google Ads or Meta report' : ''}</span>
+          {c.convert.media.length > 0 && <><Chips media={c.convert.media} total={c.convert.spend} /><span className="small muted">{fm(c.convert.spend)} on search and social ads{c.convert.platformCpa ? `, ${fm(c.convert.platformCpa)} per conversion they report` : ''}</span></>}
+        </Stage>
+      </div>
+    </section>
+  );
+}
+
+/** Every medium in one line: its job, its spend, what it did, and the verdict. */
+function Glance({ p, fm, onView }: { p: Picture; fm: (v: number) => string; onView: (v: MediaView) => void }) {
+  if (!p.glance.length) return null;
+  const max = Math.max(...p.glance.map(g => g.spend), 1);
+  const groups = [...new Set(p.glance.map(g => g.group))];
+  return (
+    <section className="panel">
+      <div className="panel-head"><div><h2>Every medium, and what to do with it</h2><p>Awareness media are judged on how results moved in the weeks they ran; search and social ads on what a conversion costs against your average.</p></div></div>
+      <div className="glance">{groups.map(gr => (
+        <div key={gr} className="glance-group">
+          <span className="small muted glance-title">{gr}</span>
+          {p.glance.filter(g => g.group === gr).map(g => (
+            <div className="glance-row" key={g.medium}>
+              <span className="clamp1"><span className="dot" style={{ background: MEDIUM_COLOR[g.medium] ?? 'var(--muted)' }} /><b>{g.label}</b></span>
+              <span className="glance-spend"><span className="camp-bar"><i style={{ width: `${(g.spend / max) * 100}%`, background: MEDIUM_COLOR[g.medium] ?? 'var(--muted)' }} /></span><span className="small">{fm(g.spend)} · {pct(g.spend / (p.spend || 1))}</span></span>
+              <span className="small glance-did"><b>{g.did}</b>{g.measure && <span className="muted"> · {g.measure}</span>}</span>
+              <span className={`tag ${VERDICT[g.verdict].tone}`}>{VERDICT[g.verdict].text}</span>
+              <button className="btn small link" onClick={() => onView(g.tab as MediaView)}>Details</button>
+            </div>
+          ))}
+        </div>
+      ))}</div>
+      {p.next.length > 0 && (
+        <div className="next-steps">
+          <h3>What to do next</h3>
+          <ol>{p.next.map((n, i) => <li key={i} className={n.tone}><span>{n.text}</span>{n.tab !== 'summary' && <button className="btn small link" onClick={() => onView(n.tab as MediaView)}>See how</button>}</li>)}</ol>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -178,7 +230,7 @@ const FIELDS: Record<OfflineMedium, { f: OfflineField; label: string; need?: boo
   results: [{ f: 'day', label: 'Date or week', need: true }, { f: 'region', label: 'City or state' }, { f: 'leads', label: 'Leads or enquiries' }, { f: 'sales', label: 'Bookings or sales' }, { f: 'value', label: 'Revenue' }],
 };
 
-function ImportOffline({ T, onDone }: { T: string; onDone: (msg: string | null) => void }) {
+export function ImportOffline({ T, onDone, initialFile }: { T: string; onDone: (msg: string | null) => void; initialFile?: File }) {
   const [medium, setMedium] = useState<OfflineMedium | null>(null);
   const [guessed, setGuessed] = useState(false);
   const [name, setName] = useState('');
@@ -194,6 +246,7 @@ function ImportOffline({ T, onDone }: { T: string; onDone: (msg: string | null) 
   const missing = medium ? FIELDS[medium].filter(x => x.need && !cols[x.f]).map(x => x.label) : [];
   const needsResult = medium === 'results' && !cols.leads && !cols.sales;
 
+  useEffect(() => { if (initialFile) choose(initialFile); }, [initialFile]); // eslint-disable-line react-hooks/exhaustive-deps
   async function choose(f0: File | undefined) {
     setErr(null); setRaw(null);
     if (!f0) return;
