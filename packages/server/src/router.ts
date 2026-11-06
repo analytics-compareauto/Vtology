@@ -14,6 +14,7 @@ import { schemaReady } from './schema';
 import { startConnect, finishConnect, socialOverview, syncTenant, syncAll, syncConnection, disconnect, growthOverview, addCompetitor, removeCompetitor } from './social';
 import { ROLES, type RoleCode } from '@vtology/core';
 import { listSources, createSource, updateSource, deleteSource, syncSource, syncTenantSources, dueSources } from './sources';
+import { listPerf, createPerf, appendPerf, finishPerf, deletePerf, perfOverview } from './perf';
 import { listOffline, createOffline, appendOffline, finishOffline, deleteOffline, crossMediaOverview } from './crossmedia';
 import { contentOverview, addTopics, removeTopic, suggestTopics, scanTopics, videoRetention, contentTrends, refreshAllTrends, checkTrendRanksNow } from './content';
 import { healthSummary } from './health';
@@ -130,6 +131,16 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
     const cv = route.match(/^GET content\/videos\/([0-9a-f-]{36})\/retention$/);
     if (cv) return json(200, await videoRetention(deps, ctx, cv[1]!));
     // ---- media: DSP delivery reports for awareness analysis (CTV, audio, video, display)
+    // ---- performance campaigns: Google Ads, Meta
+    if (route === 'GET performance') return json(200, await perfOverview(ctx, rangeParam(url, ctx.now, 30)));
+    if (route === 'GET performance/reports') return json(200, await listPerf(ctx));
+    if (route === 'POST performance/reports') return json(201, await createPerf(ctx, await req.json().catch(() => ({}))));
+    const pm = route.match(/^(POST|DELETE) performance\/reports\/([0-9a-f-]{36})(\/rows|\/finish)?$/);
+    if (pm) {
+      if (pm[1] === 'DELETE' && !pm[3]) return json(200, await deletePerf(ctx, pm[2]!));
+      if (pm[3] === '/rows') return json(200, await appendPerf(ctx, pm[2]!, await req.json().catch(() => ({}))));
+      if (pm[3] === '/finish') return json(200, await finishPerf(ctx, pm[2]!));
+    }
     // ---- all media together: TV, print, radio, outdoor and results next to digital
     if (route === 'GET crossmedia') return json(200, await crossMediaOverview(ctx, rangeParam(url, ctx.now, 180)));
     if (route === 'GET crossmedia/reports') return json(200, await listOffline(ctx));

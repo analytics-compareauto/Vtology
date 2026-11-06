@@ -12,3 +12,4 @@ export * from './media';
 export * from './media-sample';
 export * from './content';
 export * from './crossmedia';
+export * from './perf';

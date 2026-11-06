@@ -945,6 +945,57 @@ create index if not exists offline_daily_tenant on vt.offline_daily (tenant_id, 
 alter table vt.offline_reports enable row level security;
 alter table vt.offline_daily enable row level security;
 
+-- ===== 20261106000019_performance.sql =====
+-- Performance campaigns (Google Ads, Meta): daily totals per campaign and ad group or ad set, and
+-- search terms (totals over the report). Files themselves aren't kept.
+create table if not exists vt.perf_reports (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references vt.tenants(id) on delete cascade,
+  name text not null,
+  platform text not null check (platform in ('google', 'meta', 'other')),
+  kind text not null check (kind in ('campaigns', 'terms')),
+  currency text not null default 'INR',
+  status text not null default 'uploading' check (status in ('uploading', 'ready')),
+  rows int not null default 0,
+  date_from date,
+  date_to date,
+  created_by uuid,
+  created_at timestamptz not null default now(),
+  unique (tenant_id, name)
+);
+create table if not exists vt.perf_daily (
+  tenant_id uuid not null references vt.tenants(id) on delete cascade,
+  report_id uuid not null references vt.perf_reports(id) on delete cascade,
+  day date not null,
+  platform text not null,
+  campaign_type text not null,
+  campaign text not null,
+  ad_group text not null,
+  cost numeric not null default 0,
+  impressions numeric not null default 0,
+  clicks numeric not null default 0,
+  conversions numeric not null default 0,
+  value numeric not null default 0,
+  lost_cost numeric not null default 0,
+  lost_weight numeric not null default 0,
+  primary key (report_id, day, campaign, ad_group)
+);
+create index if not exists perf_daily_tenant on vt.perf_daily (tenant_id, day);
+create table if not exists vt.perf_terms (
+  tenant_id uuid not null references vt.tenants(id) on delete cascade,
+  report_id uuid not null references vt.perf_reports(id) on delete cascade,
+  term text not null,
+  campaign text not null,
+  cost numeric not null default 0,
+  clicks numeric not null default 0,
+  conversions numeric not null default 0,
+  value numeric not null default 0,
+  primary key (report_id, term, campaign)
+);
+alter table vt.perf_reports enable row level security;
+alter table vt.perf_daily enable row level security;
+alter table vt.perf_terms enable row level security;
+
 create schema if not exists vt_meta;
 create table if not exists vt_meta.schema_migrations (id text primary key, applied_at timestamptz not null default now());
-insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth'), ('20261103000009_data_sources'), ('20261105000010_audiences'), ('20261105000011_media'), ('20261105000012_content'), ('20261105000013_repair_json'), ('20261105000014_media_reach'), ('20261105000015_media_speed'), ('20261106000016_content_trends'), ('20261106000017_trend_ranks'), ('20261106000018_cross_media') on conflict do nothing;
+insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth'), ('20261103000009_data_sources'), ('20261105000010_audiences'), ('20261105000011_media'), ('20261105000012_content'), ('20261105000013_repair_json'), ('20261105000014_media_reach'), ('20261105000015_media_speed'), ('20261106000016_content_trends'), ('20261106000017_trend_ranks'), ('20261106000018_cross_media'), ('20261106000019_performance') on conflict do nothing;

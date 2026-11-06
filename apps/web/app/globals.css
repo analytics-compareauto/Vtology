@@ -669,3 +669,25 @@ td.num, th.num { white-space: nowrap; }
 .map-grid label { display: grid; gap: 4px; }
 @media (max-width: 640px) { .lift-row { grid-template-columns: 1fr; } .region-row { grid-template-columns: 100px minmax(0, 1fr); } .region-row > .small { grid-column: 1 / -1; } }
 .kind-pick { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--flow); border-radius: 10px; background: var(--flow-soft); }
+
+/* performance */
+.plan-hero { border: 2px solid var(--ok); }
+.plan-head { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 24px; align-items: center; margin-bottom: 14px; }
+.plan-head h2 { margin: 0 0 4px; }
+.plan-head p { margin: 0; color: var(--muted); }
+.plan-big { display: grid; text-align: right; }
+.plan-big b { font-family: var(--display); font-size: 44px; line-height: 1; color: var(--ok); letter-spacing: -0.03em; }
+.plan-big span { font-size: 13px; color: var(--muted); }
+.plan-cpa { display: grid; gap: 2px; padding: 10px 14px; border-radius: 10px; background: var(--ok-soft); }
+.plan-cpa span { font-size: 12px; color: var(--muted); }
+.plan-cpa b { white-space: nowrap; }
+.plan-rows, .camp-rows { display: grid; }
+.plan-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) 190px 120px; gap: 12px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.plan-row > .tag { justify-self: start; }
+.plan-name { display: grid; min-width: 0; }
+.plan-money { white-space: nowrap; text-align: right; }
+.plan-conv { text-align: right; white-space: nowrap; }
+.camp-row { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr) 90px 150px; gap: 12px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.camp-bar { height: 10px; border-radius: 0 5px 5px 0; background: var(--surface-2); overflow: hidden; }
+.camp-bar i { display: block; height: 100%; border-radius: 0 5px 5px 0; }
+@media (max-width: 720px) { .plan-head { grid-template-columns: 1fr; } .plan-big { text-align: left; } .plan-row { grid-template-columns: 56px minmax(0, 1fr); } .plan-money, .plan-conv { grid-column: 2; text-align: left; } .camp-row { grid-template-columns: minmax(0, 1fr) 90px; } .camp-bar { display: none; } }
