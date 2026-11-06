@@ -41,6 +41,7 @@ export interface Ctx {
   bookCode: string | null;
   tenantName: string;
   isDemo: boolean;
+  features: Record<string, boolean>;
 }
 
 const jwksCache = new Map<string, JWTVerifyGetKey>();
@@ -78,13 +79,14 @@ export async function authenticate(req: Request, deps: Pick<Deps, 'jwtSecret' | 
 
 export async function loadContext(deps: Deps, userId: string, tenantId: string): Promise<Ctx> {
   if (!/^[0-9a-f-]{36}$/i.test(tenantId)) throw new HttpError(404, 'Tenant not found.');
-  const rows = await deps.db.admin.query<{ role: RoleCode; partner_id: string | null; book_code: string | null; industry: Industry; phone_salt: string; name: string; is_demo: boolean }>(
-    `select m.role, m.partner_id, m.book_code, t.industry, t.phone_salt, t.name, t.is_demo
+  const rows = await deps.db.admin.query<{ role: RoleCode; partner_id: string | null; book_code: string | null; industry: Industry; phone_salt: string; name: string; is_demo: boolean; features: Record<string, boolean> | string | null }>(
+    `select m.role, m.partner_id, m.book_code, t.industry, t.phone_salt, t.name, t.is_demo, t.features
        from vt.memberships m join vt.tenants t on t.id = m.tenant_id
       where m.tenant_id = $1 and m.user_id = $2`, [tenantId, userId]);
   const m = rows[0];
   if (!m) throw new HttpError(403, 'You are not a member of this tenant.');
-  return { db: deps.db, now: deps.now ? deps.now() : new Date(), userId, tenantId, industry: m.industry, salt: m.phone_salt, role: m.role, partnerId: m.partner_id, bookCode: m.book_code, tenantName: m.name, isDemo: m.is_demo };
+  return { db: deps.db, now: deps.now ? deps.now() : new Date(), userId, tenantId, industry: m.industry, salt: m.phone_salt, role: m.role, partnerId: m.partner_id, bookCode: m.book_code, tenantName: m.name, isDemo: m.is_demo,
+    features: { social: true, media: true, audiences: true, journeys: true, ...(typeof m.features === 'string' ? JSON.parse(m.features) : m.features ?? {}) } };
 }
 
 export function requireRole(ctx: Ctx, roles: RoleCode[], what: string): void {

@@ -83,5 +83,9 @@ export const MIGRATIONS: { id: string; sql: string }[] = [
   {
     "id": "20261106000021_lead_work",
     "sql": "-- What the dealer's team did with each lead, beyond its stage: first contact, calls, a connected call,\n-- test drive booked or given, and the model asked about. Read from the dealer feed's history.\nalter table vt.journeys add column if not exists first_contact_at timestamptz;\nalter table vt.journeys add column if not exists calls int not null default 0;\nalter table vt.journeys add column if not exists connected boolean not null default false;\nalter table vt.journeys add column if not exists td_booked boolean not null default false;\nalter table vt.journeys add column if not exists td_given boolean not null default false;\nalter table vt.journeys add column if not exists model text;\nalter table vt.journeys add column if not exists lead_at timestamptz;\n"
+  },
+  {
+    "id": "20261106000022_admin",
+    "sql": "-- Vanaya's side: each client's plan, which parts are switched on, and the activation margin (never\n-- shown to the client); and a record of every change made from the admin panel.\nalter table vt.tenants add column if not exists plan text not null default 'enterprise';\nalter table vt.tenants add column if not exists features jsonb not null default '{\"social\": true, \"media\": true, \"audiences\": true, \"journeys\": true}'::jsonb;\nalter table vt.tenants add column if not exists margin_pct numeric;\nalter table vt.tenants add column if not exists admin_note text;\ncreate table if not exists vt.admin_audit (\n  id bigint generated always as identity primary key,\n  at timestamptz not null default now(),\n  admin_email text not null,\n  tenant_id uuid references vt.tenants(id) on delete set null,\n  tenant_name text,\n  action text not null,\n  detail jsonb not null default '{}'::jsonb\n);\nalter table vt.admin_audit enable row level security;\n"
   }
 ];

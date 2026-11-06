@@ -40,7 +40,7 @@ describe('sign-in, workspaces and sample data', () => {
   });
 
   it('lets the first person create a workspace, loading Automotive sample data through the real pipeline', async () => {
-    expect((await call(ana.accessToken, 'GET', '/workspaces')).body).toEqual({ workspaces: [], canCreate: true });
+    expect((await call(ana.accessToken, 'GET', '/workspaces')).body).toMatchObject({ workspaces: [], canCreate: true });
     const t0 = Date.now();
     const r = await call(ana.accessToken, 'POST', '/workspaces', { name: 'Vegaa Motors (sample)', industry: 'Automotive', sample: true });
     expect(r.status).toBe(201);
@@ -84,7 +84,7 @@ describe('sign-in, workspaces and sample data', () => {
 
   it('only admins create more workspaces; real workspaces do not allow role switching', async () => {
     ben = await login('ben@vanaya.test');
-    expect((await call(ben.accessToken, 'GET', '/workspaces')).body).toEqual({ workspaces: [], canCreate: false });
+    expect((await call(ben.accessToken, 'GET', '/workspaces')).body).toMatchObject({ workspaces: [], canCreate: false });
     expect((await call(ben.accessToken, 'POST', '/workspaces', { name: 'Mine', industry: 'BFSI' })).status).toBe(403);
     expect((await call(ben.accessToken, 'GET', `/tenants/${ws.id}/journeys`)).status).toBe(403);
     const real = await call(ana.accessToken, 'POST', '/workspaces', { name: 'Vegaa Motors', industry: 'Automotive' });

@@ -13,13 +13,14 @@ import { SocialHub } from './views/SocialHub';
 import { Audiences } from './views/Audiences';
 import { Media } from './views/Media';
 import { MediaHub } from './views/MediaHub';
+import { Admin } from './views/Admin';
 import { ActionDialog, type ActionDraft } from './ActionDialog';
 import { ErrorBoundary } from './ErrorBoundary';
 import { loadRange, type Range } from './DateRange';
 import { BrandMark, IconApprovals, IconAudience, IconData, IconMedia, IconFindings, IconJourneys, IconOverview, IconPartners, IconSocial } from './icons';
 
 export interface WorkspaceData { me: Me; journeys: Journey[]; partners: PartnerScore[]; findings: Finding[]; actions: ActionRun[] }
-type Tab = 'overview' | 'journeys' | 'findings' | 'partners' | 'social' | 'media' | 'audiences' | 'approvals' | 'data';
+type Tab = 'admin' | 'overview' | 'journeys' | 'findings' | 'partners' | 'social' | 'media' | 'audiences' | 'approvals' | 'data';
 const TABS: { id: Tab; label: string; Icon: (p: React.SVGProps<SVGSVGElement>) => React.JSX.Element; lead: string }[] = [
   { id: 'overview', label: 'Overview', Icon: IconOverview, lead: 'Where every customer journey stands, and what is leaking.' },
   { id: 'journeys', label: 'Journeys', Icon: IconJourneys, lead: 'Every customer, the stage they are at, and how long they have waited.' },
@@ -35,9 +36,10 @@ const TABS: { id: Tab; label: string; Icon: (p: React.SVGProps<SVGSVGElement>) =
 export function Dashboard({ workspaceId, email, onSwitch, onSignOut }: { workspaceId: string; email: string | null; onSwitch: (id: string | null) => void; onSignOut: () => void }) {
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [owner, setOwner] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>(() => {
-    try { const t = new URLSearchParams(window.location.search).get('tab'); if (t === 'allmedia' || t === 'performance') return 'media'; if (t === 'growth' || t === 'content') return 'social'; return TABS.some(x => x.id === t) ? t as Tab : 'overview'; } catch { return 'overview'; }
+    try { const t = new URLSearchParams(window.location.search).get('tab'); if (t === 'allmedia' || t === 'performance') return 'media'; if (t === 'growth' || t === 'content') return 'social'; if (t === 'admin') return 'admin'; return TABS.some(x => x.id === t) ? t as Tab : 'overview'; } catch { return 'overview'; }
   });
   const [initialMediaView] = useState<'summary' | 'awareness' | 'search' | 'files'>(() => {
     try { const q = new URLSearchParams(window.location.search); const v = q.get('view'); if (q.get('tab') === 'performance') return 'search'; return v === 'awareness' || v === 'search' || v === 'files' ? v : 'summary'; } catch { return 'summary'; }
@@ -66,7 +68,7 @@ export function Dashboard({ workspaceId, email, onSwitch, onSignOut }: { workspa
     }
   }, [T, onSwitch]);
 
-  useEffect(() => { load(); api<{ workspaces: Workspace[] }>('GET', '/workspaces').then(r => setWorkspaces(r.workspaces)).catch(() => undefined); }, [load]);
+  useEffect(() => { load(); api<{ workspaces: Workspace[]; isOwner?: boolean }>('GET', '/workspaces').then(r => { setWorkspaces(r.workspaces); setOwner(!!r.isOwner); }).catch(() => undefined); }, [load]);
   // connected sources not pulled in the last hour: pull them quietly, then refresh what's on screen
   useEffect(() => {
     api<{ pulled: number }>('POST', `${T}/sources/sync-due`).then(r => { if (r.pulled) load(); }).catch(() => undefined);
@@ -99,9 +101,12 @@ export function Dashboard({ workspaceId, email, onSwitch, onSignOut }: { workspa
   const scope = me.role === 'partner_user' && me.partner ? `only journeys assigned to ${me.partner}; money is hidden`
     : me.role === 'relationship_manager' && me.bookCode ? `only customers in book ${me.bookCode}; money is hidden` : ROLE_SCOPE[me.role];
 
-  const current = TABS.find(t => t.id === tab)!;
+  const FEATURE_OF: Partial<Record<Tab, 'social' | 'media' | 'audiences' | 'journeys'>> = { social: 'social', media: 'media', audiences: 'audiences', journeys: 'journeys', findings: 'journeys', partners: 'journeys', approvals: 'journeys' };
+  const allowed = (t: Tab) => { const f = FEATURE_OF[t]; return !f || (me as Me & { features?: Record<string, boolean> }).features?.[f] !== false; };
+  const ADMIN = { id: 'admin' as Tab, label: 'Vanaya admin', Icon: IconData, lead: 'Every client, its plan, the parts switched on, the margin, and a record of every change.' };
+  const current = tab === 'admin' && owner ? ADMIN : TABS.find(t => t.id === tab && allowed(t.id)) ?? TABS[0]!;
   const go = (t: Tab | 'growth' | 'content') => { if (t === 'growth' || t === 'content') { setSocialView(t); t = 'social'; } setTab(t); try { window.history.replaceState(null, '', `?tab=${t}`); } catch { /* ignore */ } window.scrollTo({ top: 0 }); };
-  const navItems = TABS.map(t => ({ ...t, badge: t.id === 'approvals' && pending > 0 ? pending : 0 }));
+  const navItems = [...TABS.filter(t => allowed(t.id)), ...(owner ? [ADMIN] : [])].map(t => ({ ...t, badge: t.id === 'approvals' && pending > 0 ? pending : 0 }));
 
   return (
     <div className="shell">
@@ -146,19 +151,20 @@ export function Dashboard({ workspaceId, email, onSwitch, onSignOut }: { workspa
           <div className="page-head">
             <div>
               <h1>{current.label}</h1>
-              <p className="muted">{current.lead} <span className="small">As {ROLES[me.role].label.toLowerCase()} you see {scope}.</span></p>
+              <p className="muted">{current.lead} {current.id !== 'admin' && <span className="small">As {ROLES[me.role].label.toLowerCase()} you see {scope}.</span>}</p>
             </div>
           </div>
           <ErrorBoundary resetKey={tab}>
-          {tab === 'overview' && <Overview data={data} go={go} />}
-          {tab === 'journeys' && <Journeys data={data} act={act} />}
-          {tab === 'findings' && <Findings data={data} act={act} />}
-          {tab === 'partners' && <Partners data={data} act={act} />}
-          {tab === 'social' && (['partner_user', 'relationship_manager'].includes(me.role) ? <div className="empty">Social insights are not part of your role’s view.</div> : <SocialHub key={initialSocialView} data={data} workspaceId={workspaceId} notify={setToast} range={range} onRange={setRange} initialView={initialSocialView} />)}
-          {tab === 'media' && (['marketing_head', 'data_steward', 'finance'].includes(me.role) ? <MediaHub workspaceId={workspaceId} notify={setToast} range={range} onRange={setRange} canEdit={me.role === 'marketing_head' || me.role === 'data_steward'} initialView={initialMediaView} /> : <div className="empty">Media reports carry spend, so they are open to marketing heads, data stewards and finance.</div>)}
-          {tab === 'audiences' && <Audiences workspaceId={workspaceId} notify={setToast} isDemo={me.isDemo} canEdit={me.role === 'marketing_head' || me.role === 'data_steward'} />}
-          {tab === 'approvals' && <Approvals data={data} workspaceId={workspaceId} reload={load} notify={setToast} />}
-          {tab === 'data' && <DataView data={data} workspaceId={workspaceId} reload={load} notify={setToast} />}
+          {tab === 'admin' && owner && <Admin notify={setToast} />}
+          {current.id === 'overview' && <Overview data={data} go={go} />}
+          {current.id === 'journeys' && <Journeys data={data} act={act} />}
+          {current.id === 'findings' && <Findings data={data} act={act} />}
+          {current.id === 'partners' && <Partners data={data} act={act} />}
+          {current.id === 'social' && (['partner_user', 'relationship_manager'].includes(me.role) ? <div className="empty">Social insights are not part of your role’s view.</div> : <SocialHub key={initialSocialView} data={data} workspaceId={workspaceId} notify={setToast} range={range} onRange={setRange} initialView={initialSocialView} />)}
+          {current.id === 'media' && (['marketing_head', 'data_steward', 'finance'].includes(me.role) ? <MediaHub workspaceId={workspaceId} notify={setToast} range={range} onRange={setRange} canEdit={me.role === 'marketing_head' || me.role === 'data_steward'} initialView={initialMediaView} /> : <div className="empty">Media reports carry spend, so they are open to marketing heads, data stewards and finance.</div>)}
+          {current.id === 'audiences' && <Audiences workspaceId={workspaceId} notify={setToast} isDemo={me.isDemo} canEdit={me.role === 'marketing_head' || me.role === 'data_steward'} />}
+          {current.id === 'approvals' && <Approvals data={data} workspaceId={workspaceId} reload={load} notify={setToast} />}
+          {current.id === 'data' && <DataView data={data} workspaceId={workspaceId} reload={load} notify={setToast} />}
           </ErrorBoundary>
         </main>
       </div>

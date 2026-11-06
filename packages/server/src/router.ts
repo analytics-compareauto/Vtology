@@ -15,6 +15,7 @@ import { startConnect, finishConnect, socialOverview, syncTenant, syncAll, syncC
 import { ROLES, type RoleCode } from '@vtology/core';
 import { listSources, createSource, checkSource, updateSource, deleteSource, syncSource, syncTenantSources, dueSources } from './sources';
 import { adToCar } from './adtocar';
+import { adminOverview, adminUpdateTenant, featureOfRoute, isOwner, tokenEmail } from './admin';
 import { listPerf, createPerf, appendPerf, finishPerf, deletePerf, perfOverview } from './perf';
 import { listOffline, createOffline, appendOffline, finishOffline, deleteOffline, crossMediaOverview } from './crossmedia';
 import { contentOverview, addTopics, removeTopic, suggestTopics, scanTopics, videoRetention, contentTrends, refreshAllTrends, checkTrendRanksNow } from './content';
@@ -82,12 +83,19 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
       return json(200, { ...r, sources: s, expiredLists: purged, trends });
     }
     const userId = await authenticate(req, deps);
-    if (top === 'GET workspaces') return json(200, await listWorkspaces(deps, userId));
+    // ---- Vanaya's admin panel (owners only; everyone else gets "not found")
+    if (top === 'GET admin') return json(200, await adminOverview(deps, tokenEmail(req)));
+    const at = top.match(/^PATCH admin\/tenants\/([0-9a-f-]{36})$/);
+    if (at) return json(200, await adminUpdateTenant(deps, tokenEmail(req), at[1]!, await req.json().catch(() => ({}))));
+    if (top === 'GET workspaces') return json(200, { ...(await listWorkspaces(deps, userId)), isOwner: isOwner(deps, tokenEmail(req)) });
     if (top === 'POST workspaces') return json(201, await createWorkspace(deps, userId, await body(req, WorkspaceSchema)));
     if (parts[0] !== 'tenants' || !parts[1]) throw new HttpError(404, 'Not found.');
 
     const ctx = await loadContext(deps, userId, parts[1]);
     const route = `${req.method} ${parts.slice(2).join('/')}`;
+    // a part of the dashboard that isn't in the client's plan is refused
+    const feature = featureOfRoute(route);
+    if (feature && ctx.features[feature] === false) throw new HttpError(403, 'This part of Vtology isn’t in your plan. Ask your Vanaya account manager to switch it on.');
 
     if (route === 'GET me') return json(200, await me(ctx));
     if (route === 'GET summary') return json(200, await healthSummary(ctx));

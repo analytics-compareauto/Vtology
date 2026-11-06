@@ -1012,6 +1012,24 @@ alter table vt.journeys add column if not exists td_given boolean not null defau
 alter table vt.journeys add column if not exists model text;
 alter table vt.journeys add column if not exists lead_at timestamptz;
 
+-- ===== 20261106000022_admin.sql =====
+-- Vanaya's side: each client's plan, which parts are switched on, and the activation margin (never
+-- shown to the client); and a record of every change made from the admin panel.
+alter table vt.tenants add column if not exists plan text not null default 'enterprise';
+alter table vt.tenants add column if not exists features jsonb not null default '{"social": true, "media": true, "audiences": true, "journeys": true}'::jsonb;
+alter table vt.tenants add column if not exists margin_pct numeric;
+alter table vt.tenants add column if not exists admin_note text;
+create table if not exists vt.admin_audit (
+  id bigint generated always as identity primary key,
+  at timestamptz not null default now(),
+  admin_email text not null,
+  tenant_id uuid references vt.tenants(id) on delete set null,
+  tenant_name text,
+  action text not null,
+  detail jsonb not null default '{}'::jsonb
+);
+alter table vt.admin_audit enable row level security;
+
 create schema if not exists vt_meta;
 create table if not exists vt_meta.schema_migrations (id text primary key, applied_at timestamptz not null default now());
-insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth'), ('20261103000009_data_sources'), ('20261105000010_audiences'), ('20261105000011_media'), ('20261105000012_content'), ('20261105000013_repair_json'), ('20261105000014_media_reach'), ('20261105000015_media_speed'), ('20261106000016_content_trends'), ('20261106000017_trend_ranks'), ('20261106000018_cross_media'), ('20261106000019_performance'), ('20261106000020_source_dealer_scope'), ('20261106000021_lead_work') on conflict do nothing;
+insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth'), ('20261103000009_data_sources'), ('20261105000010_audiences'), ('20261105000011_media'), ('20261105000012_content'), ('20261105000013_repair_json'), ('20261105000014_media_reach'), ('20261105000015_media_speed'), ('20261106000016_content_trends'), ('20261106000017_trend_ranks'), ('20261106000018_cross_media'), ('20261106000019_performance'), ('20261106000020_source_dealer_scope'), ('20261106000021_lead_work'), ('20261106000022_admin') on conflict do nothing;
