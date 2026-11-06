@@ -89,7 +89,7 @@ export function Content({ workspaceId, notify, range, onRange }: { workspaceId: 
         </section>
       )}
 
-      <Trending T={T} canEdit={d.canEdit} tracked={d.topics.map(t => t.phrase.toLowerCase())} onAdd={add} />
+      <Trending T={T} canEdit={d.canEdit} tracked={new Map(d.topics.map(t => [t.phrase.toLowerCase(), t.id]))} onAdd={add} onRemove={async id => { await api('DELETE', `${T}/content/topics/${id}`); load(); }} />
 
       <Topics T={T} d={d} busy={busy === 'scan'} onScan={scan} onAdd={add} onRemove={async id => { await api('DELETE', `${T}/content/topics/${id}`); load(); }} />
 
@@ -274,7 +274,7 @@ function Pager({ pages, page, onPage, label }: { pages: number; page: number; on
 interface Trend { phrase: string; score: number; theme: string; rank: number; previousRank: number | null; seeds: number }
 
 /** The category's top 100 searches on YouTube, refreshed daily, 20 to a page, with one click to track any of them. */
-function Trending({ T, canEdit, tracked, onAdd }: { T: string; canEdit: boolean; tracked: string[]; onAdd: (p: string[]) => void }) {
+function Trending({ T, canEdit, tracked, onAdd, onRemove }: { T: string; canEdit: boolean; tracked: Map<string, string>; onAdd: (p: string[]) => void; onRemove: (id: string) => void }) {
   const [r, setR] = useState<{ computedAt: string | null; items: Trend[] } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [page, setPage] = useState(0);
@@ -288,7 +288,7 @@ function Trending({ T, canEdit, tracked, onAdd }: { T: string; canEdit: boolean;
   const hadBefore = !!r?.items.some(x => x.previousRank !== null);
   return (
     <section className="panel">
-      <div className="panel-head"><div><h2>Top 100 searches in your category on YouTube</h2><p>What people type most, ranked by how high YouTube suggests it, worked out again every day.{r?.computedAt ? ` Updated ${ago(r.computedAt)}.` : ''} Track a search to see who ranks for it.</p></div></div>
+      <div className="panel-head"><div><h2>Top 100 searches in your category on YouTube</h2><p>What people type most, ranked by how high YouTube suggests it, worked out again every day.{r?.computedAt ? ` Updated ${ago(r.computedAt)}.` : ''} Track a search to have it searched every week and see where you and competitors rank (shown in the next section); Untrack stops it.</p></div></div>
       {err ? <div className="error-box">{err}</div> : !r ? <div className="progress" /> : (
         <>
           <div className="trend-themes" role="group" aria-label="Filter by kind of search">
@@ -297,7 +297,7 @@ function Trending({ T, canEdit, tracked, onAdd }: { T: string; canEdit: boolean;
           </div>
           <ol className="trend-list">
             {shown.map(x => {
-              const isTracked = tracked.includes(x.phrase);
+              const trackedId = tracked.get(x.phrase);
               const move = x.previousRank === null ? (hadBefore ? 'new' : null) : x.previousRank - x.rank;
               return (
                 <li key={x.phrase}>
@@ -306,7 +306,7 @@ function Trending({ T, canEdit, tracked, onAdd }: { T: string; canEdit: boolean;
                   <span className="tag plain trend-theme">{x.theme}</span>
                   <span className="trend-bar" title={`${x.score} of 100`}><i style={{ width: `${x.score}%` }} /></span>
                   <span className={`trend-move ${move === 'new' || (typeof move === 'number' && move > 0) ? 'up' : typeof move === 'number' && move < 0 ? 'down' : ''}`}>{move === 'new' ? 'New' : typeof move === 'number' && move !== 0 ? `${move > 0 ? '▲' : '▼'}${Math.abs(move)}` : ''}</span>
-                  {canEdit && (isTracked ? <span className="small muted trend-act">Tracked</span> : <button className="btn small trend-act" onClick={() => onAdd([x.phrase])}>Track</button>)}
+                  {canEdit && (trackedId ? <button className="btn small link trend-act" title="Stop searching YouTube for this every week" onClick={() => onRemove(trackedId)}>Untrack</button> : <button className="btn small trend-act" title="Search YouTube for this every week and see who ranks" onClick={() => onAdd([x.phrase])}>Track</button>)}
                 </li>
               );
             })}
