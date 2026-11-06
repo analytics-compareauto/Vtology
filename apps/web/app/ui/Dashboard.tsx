@@ -9,27 +9,23 @@ import { Findings } from './views/Findings';
 import { Partners } from './views/Partners';
 import { Approvals } from './views/Approvals';
 import { DataView } from './views/DataView';
-import { Social } from './views/Social';
-import { Growth } from './views/Growth';
+import { SocialHub } from './views/SocialHub';
 import { Audiences } from './views/Audiences';
 import { Media } from './views/Media';
 import { MediaHub } from './views/MediaHub';
-import { Content } from './views/Content';
 import { ActionDialog, type ActionDraft } from './ActionDialog';
 import { ErrorBoundary } from './ErrorBoundary';
 import { loadRange, type Range } from './DateRange';
-import { BrandMark, IconApprovals, IconAudience, IconContent, IconData, IconMedia, IconFindings, IconGrowth, IconJourneys, IconOverview, IconPartners, IconSocial } from './icons';
+import { BrandMark, IconApprovals, IconAudience, IconData, IconMedia, IconFindings, IconJourneys, IconOverview, IconPartners, IconSocial } from './icons';
 
 export interface WorkspaceData { me: Me; journeys: Journey[]; partners: PartnerScore[]; findings: Finding[]; actions: ActionRun[] }
-type Tab = 'overview' | 'journeys' | 'findings' | 'partners' | 'social' | 'growth' | 'content' | 'media' | 'audiences' | 'approvals' | 'data';
+type Tab = 'overview' | 'journeys' | 'findings' | 'partners' | 'social' | 'media' | 'audiences' | 'approvals' | 'data';
 const TABS: { id: Tab; label: string; Icon: (p: React.SVGProps<SVGSVGElement>) => React.JSX.Element; lead: string }[] = [
   { id: 'overview', label: 'Overview', Icon: IconOverview, lead: 'Where every customer journey stands, and what is leaking.' },
   { id: 'journeys', label: 'Journeys', Icon: IconJourneys, lead: 'Every customer, the stage they are at, and how long they have waited.' },
   { id: 'findings', label: 'Findings', Icon: IconFindings, lead: 'Numbers that don’t add up across your systems, grouped by what to do about them.' },
   { id: 'partners', label: 'Partners', Icon: IconPartners, lead: 'How each dealer, branch or distributor handles the customers sent to them.' },
-  { id: 'social', label: 'Social', Icon: IconSocial, lead: 'What your posts and paid campaigns achieve, and what to change.' },
-  { id: 'growth', label: 'Growth', Icon: IconGrowth, lead: 'Followers, reach and engagement against the previous period and your competitors, with a plan to grow.' },
-  { id: 'content', label: 'Content', Icon: IconContent, lead: 'Your standout posts and competitors’, what people search on YouTube and who ranks, and how to fix your videos.' },
+  { id: 'social', label: 'Social', Icon: IconSocial, lead: 'Your social accounts against competitors, what your posts and ads achieve, and what to make next.' },
   { id: 'media', label: 'Media', Icon: IconMedia, lead: 'Everything you spend on, main and digital: how it moved people from aware to buying, what each medium did, and what to do next.' },
   { id: 'audiences', label: 'Audiences', Icon: IconAudience, lead: 'Hashed customer lists, the buckets you reach, and proof against people held back.' },
   { id: 'approvals', label: 'Approvals', Icon: IconApprovals, lead: 'Fixes waiting for a decision, and the ones already applied.' },
@@ -41,10 +37,13 @@ export function Dashboard({ workspaceId, email, onSwitch, onSignOut }: { workspa
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>(() => {
-    try { const t = new URLSearchParams(window.location.search).get('tab'); if (t === 'allmedia' || t === 'performance') return 'media'; return TABS.some(x => x.id === t) ? t as Tab : 'overview'; } catch { return 'overview'; }
+    try { const t = new URLSearchParams(window.location.search).get('tab'); if (t === 'allmedia' || t === 'performance') return 'media'; if (t === 'growth' || t === 'content') return 'social'; return TABS.some(x => x.id === t) ? t as Tab : 'overview'; } catch { return 'overview'; }
   });
   const [initialMediaView] = useState<'summary' | 'awareness' | 'search' | 'files'>(() => {
     try { const q = new URLSearchParams(window.location.search); const v = q.get('view'); if (q.get('tab') === 'performance') return 'search'; return v === 'awareness' || v === 'search' || v === 'files' ? v : 'summary'; } catch { return 'summary'; }
+  });
+  const [initialSocialView, setSocialView] = useState<'growth' | 'posts' | 'content'>(() => {
+    try { const q = new URLSearchParams(window.location.search); const t = q.get('tab'), v = q.get('view'); if (t === 'content') return 'content'; if (t === 'growth') return 'growth'; return v === 'posts' || v === 'content' ? v : 'growth'; } catch { return 'growth'; }
   });
   const [draft, setDraft] = useState<ActionDraft | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -101,7 +100,7 @@ export function Dashboard({ workspaceId, email, onSwitch, onSignOut }: { workspa
     : me.role === 'relationship_manager' && me.bookCode ? `only customers in book ${me.bookCode}; money is hidden` : ROLE_SCOPE[me.role];
 
   const current = TABS.find(t => t.id === tab)!;
-  const go = (t: Tab) => { setTab(t); try { window.history.replaceState(null, '', `?tab=${t}`); } catch { /* ignore */ } window.scrollTo({ top: 0 }); };
+  const go = (t: Tab | 'growth' | 'content') => { if (t === 'growth' || t === 'content') { setSocialView(t); t = 'social'; } setTab(t); try { window.history.replaceState(null, '', `?tab=${t}`); } catch { /* ignore */ } window.scrollTo({ top: 0 }); };
   const navItems = TABS.map(t => ({ ...t, badge: t.id === 'approvals' && pending > 0 ? pending : 0 }));
 
   return (
@@ -155,9 +154,7 @@ export function Dashboard({ workspaceId, email, onSwitch, onSignOut }: { workspa
           {tab === 'journeys' && <Journeys data={data} act={act} />}
           {tab === 'findings' && <Findings data={data} act={act} />}
           {tab === 'partners' && <Partners data={data} act={act} />}
-          {tab === 'social' && (['partner_user', 'relationship_manager'].includes(me.role) ? <div className="empty">Social insights are not part of your role’s view.</div> : <Social data={data} workspaceId={workspaceId} notify={setToast} range={range} onRange={setRange} />)}
-          {tab === 'growth' && (['partner_user', 'relationship_manager'].includes(me.role) ? <div className="empty">Growth insights are not part of your role’s view.</div> : <Growth data={data} workspaceId={workspaceId} notify={setToast} range={range} onRange={setRange} />)}
-          {tab === 'content' && (['partner_user', 'relationship_manager'].includes(me.role) ? <div className="empty">Content insights are not part of your role’s view.</div> : <Content workspaceId={workspaceId} notify={setToast} range={range} onRange={setRange} />)}
+          {tab === 'social' && (['partner_user', 'relationship_manager'].includes(me.role) ? <div className="empty">Social insights are not part of your role’s view.</div> : <SocialHub key={initialSocialView} data={data} workspaceId={workspaceId} notify={setToast} range={range} onRange={setRange} initialView={initialSocialView} />)}
           {tab === 'media' && (['marketing_head', 'data_steward', 'finance'].includes(me.role) ? <MediaHub workspaceId={workspaceId} notify={setToast} range={range} onRange={setRange} canEdit={me.role === 'marketing_head' || me.role === 'data_steward'} initialView={initialMediaView} /> : <div className="empty">Media reports carry spend, so they are open to marketing heads, data stewards and finance.</div>)}
           {tab === 'audiences' && <Audiences workspaceId={workspaceId} notify={setToast} isDemo={me.isDemo} canEdit={me.role === 'marketing_head' || me.role === 'data_steward'} />}
           {tab === 'approvals' && <Approvals data={data} workspaceId={workspaceId} reload={load} notify={setToast} />}
