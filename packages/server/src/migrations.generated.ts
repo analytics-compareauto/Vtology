@@ -79,5 +79,9 @@ export const MIGRATIONS: { id: string; sql: string }[] = [
   {
     "id": "20261106000020_source_dealer_scope",
     "sql": "-- A source can be limited to some dealers (and their branches): a dealer group's workspace takes only\n-- its own leads from a feed that carries every dealer's.\nalter table vt.data_sources add column if not exists dealer_scope text[] not null default '{}';\n"
+  },
+  {
+    "id": "20261106000021_lead_work",
+    "sql": "-- What the dealer's team did with each lead, beyond its stage: first contact, calls, a connected call,\n-- test drive booked or given, and the model asked about. Read from the dealer feed's history.\nalter table vt.journeys add column if not exists first_contact_at timestamptz;\nalter table vt.journeys add column if not exists calls int not null default 0;\nalter table vt.journeys add column if not exists connected boolean not null default false;\nalter table vt.journeys add column if not exists td_booked boolean not null default false;\nalter table vt.journeys add column if not exists td_given boolean not null default false;\nalter table vt.journeys add column if not exists model text;\nalter table vt.journeys add column if not exists lead_at timestamptz;\n"
   }
 ];

@@ -1001,6 +1001,17 @@ alter table vt.perf_terms enable row level security;
 -- its own leads from a feed that carries every dealer's.
 alter table vt.data_sources add column if not exists dealer_scope text[] not null default '{}';
 
+-- ===== 20261106000021_lead_work.sql =====
+-- What the dealer's team did with each lead, beyond its stage: first contact, calls, a connected call,
+-- test drive booked or given, and the model asked about. Read from the dealer feed's history.
+alter table vt.journeys add column if not exists first_contact_at timestamptz;
+alter table vt.journeys add column if not exists calls int not null default 0;
+alter table vt.journeys add column if not exists connected boolean not null default false;
+alter table vt.journeys add column if not exists td_booked boolean not null default false;
+alter table vt.journeys add column if not exists td_given boolean not null default false;
+alter table vt.journeys add column if not exists model text;
+alter table vt.journeys add column if not exists lead_at timestamptz;
+
 create schema if not exists vt_meta;
 create table if not exists vt_meta.schema_migrations (id text primary key, applied_at timestamptz not null default now());
-insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth'), ('20261103000009_data_sources'), ('20261105000010_audiences'), ('20261105000011_media'), ('20261105000012_content'), ('20261105000013_repair_json'), ('20261105000014_media_reach'), ('20261105000015_media_speed'), ('20261106000016_content_trends'), ('20261106000017_trend_ranks'), ('20261106000018_cross_media'), ('20261106000019_performance'), ('20261106000020_source_dealer_scope') on conflict do nothing;
+insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth'), ('20261103000009_data_sources'), ('20261105000010_audiences'), ('20261105000011_media'), ('20261105000012_content'), ('20261105000013_repair_json'), ('20261105000014_media_reach'), ('20261105000015_media_speed'), ('20261106000016_content_trends'), ('20261106000017_trend_ranks'), ('20261106000018_cross_media'), ('20261106000019_performance'), ('20261106000020_source_dealer_scope'), ('20261106000021_lead_work') on conflict do nothing;

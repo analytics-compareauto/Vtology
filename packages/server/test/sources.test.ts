@@ -154,3 +154,27 @@ describe('a dealer group takes only its own leads', () => {
   });
 });
 
+describe('from ad to car', () => {
+  it('follows each campaign to calls, test drives and bookings, with what each step cost', async () => {
+    const w = (await call(token, 'POST', '/workspaces', { name: 'IJM Toyota Dealer', industry: 'Automotive', sample: false })).body.workspace.id;
+    leads = [
+      lead('41', { updatedAt: '2026-10-28T10:20:00Z', interest: { model: 'Toyota Urban Cruiser Hyryder', fuelType: 'CNG' }, progress: { status: 'Contacted', testDriveStatus: 'Booked', callOutcome: 'Connected' },
+        history: [{ at: '2026-10-28T10:00:00Z', status: 'New', note: 'Lead received via Campaign Landing Page' }, { at: '2026-10-28T10:11:00Z', status: 'Contacted', note: 'Marked Contacted via Dealer Portal' },
+                  { at: '2026-10-28T10:18:00Z', status: 'Contacted', note: 'Called customer (Connected)' }, { at: '2026-10-28T10:18:00Z', status: 'Contacted', note: 'Test Drive Booked' }] }),
+      lead('42', { updatedAt: '2026-10-28T12:00:00Z', interest: { model: 'Vehicle Inquiry' }, progress: { status: 'Contacted', callOutcome: 'No answer' },
+        history: [{ at: '2026-10-28T10:00:00Z', status: 'New', note: 'Lead received' }, { at: '2026-10-28T12:00:00Z', status: 'Contacted', note: 'Called customer (No answer)' }] }),
+      lead('43', { updatedAt: '2026-10-28T10:01:00Z' }),
+    ];
+    expect((await call(token, 'POST', `/tenants/${w}/sources`, { name: 'Dealer dashboard', baseUrl: FEED, key: KEY, dealerScope: ['D1'] })).status).toBe(201);
+    const r = await call(token, 'POST', `/tenants/${w}/performance/reports`, { name: 'Meta Oct', platform: 'meta', kind: 'campaigns' });
+    await call(token, 'POST', `/tenants/${w}/performance/reports/${r.body.id}/rows`, { rows: [{ day: '2026-10-28', campaign: 'IJM_Toyota_Hyryder_Lead_Oct26', campaignType: 'Meta', adGroup: 'Lookalike', cost: 30000, impressions: 90000, clicks: 900, conversions: 3, value: 0 }] });
+    await call(token, 'POST', `/tenants/${w}/performance/reports/${r.body.id}/finish`);
+    const a = (await call(token, 'GET', `/tenants/${w}/adtocar?from=2026-10-01&to=2026-11-03`)).body.adToCar;
+    expect(a.total).toMatchObject({ leads: 3, contacted: 2, reached: 1, tdBooked: 1, tdGiven: 0, booked: 0, minutesToContact: 11 });
+    expect(a.campaigns[0]).toMatchObject({ name: 'IJM_Toyota_Hyryder_Lead_Oct26', cost: 30000, leads: 3, perLead: 10000, perTestDrive: 30000 });
+    expect(a.waiting).toBe(2);
+    expect(a.models.map((m: any) => m.model)).toEqual(['Model not given', 'Toyota Urban Cruiser Hyryder']);
+    expect(a.findings.map((f: any) => f.title)).toEqual(expect.arrayContaining(['2 leads have had no conversation yet', 'Many leads don’t say which car']));
+  });
+});
+

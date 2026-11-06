@@ -5,7 +5,7 @@
  * everything changed since the last successful pull (with a small overlap) is fetched page by page,
  * within a time budget; whatever does not fit is picked up on the next run.
  */
-import { DEFAULT_STATUS_MAP, STAGES, feedLeadToJourney, hashValue, normalizeEmail, normalizePhone, type FeedDealer, type FeedLead } from '@vtology/core';
+import { DEFAULT_STATUS_MAP, STAGES, feedLeadToJourney, leadWork, hashValue, normalizeEmail, normalizePhone, type FeedDealer, type FeedLead } from '@vtology/core';
 import { HttpError, requireRole, loadContext, type Ctx, type Deps } from './context';
 import { decrypt, encrypt, requireSecret } from './secrets';
 import { runPipeline } from './pipeline';
@@ -206,6 +206,10 @@ export async function syncSource(deps: Deps, tenantId: string, id: string, budge
                value_inr = coalesce(excluded.value_inr, vt.journeys.value_inr)`,
             [tenantId, j.journeyRef, j.personRef, phoneHash, campaignId, partnerId, j.stageIndex, j.stageEnteredAt, j.lastActivityAt, j.converted, j.valueInr]);
           if (before && j.stageIndex > before.stage_index) out.moved++;
+          // the dealer's work on it: first contact, calls, test drive (read fresh each time the lead changes)
+          const w = leadWork(lead);
+          await sql.query(`update vt.journeys set first_contact_at = coalesce(least(first_contact_at, $3::timestamptz), $3::timestamptz), calls = greatest(calls, $4), connected = connected or $5, td_booked = td_booked or $6, td_given = td_given or $7, model = coalesce($8, model), lead_at = coalesce(lead_at, $9::timestamptz)
+            where tenant_id = $1 and external_ref = $2`, [tenantId, j.journeyRef, w.firstContactAt, w.calls, w.connected, w.testDriveBooked, w.testDriveGiven, w.model, lead.createdAt ?? null]);
           // a sale the dealer recorded is a sale: it closes the journey with evidence
           if (j.sold && j.valueInr) await sql.query(
             `insert into vt.transactions (tenant_id, external_ref, journey_ref, journey_id, person_ref, person_phone_hash, partner_id, occurred_at, value_inr, evidence)

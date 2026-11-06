@@ -32,6 +32,36 @@ export const DEFAULT_STATUS_MAP: Record<Industry, Record<string, string>> = {
   FMCG: { 'New': STAGES.FMCG[0]!.name },
 };
 
+/** What the dealer's team did with a lead, beyond its stage: how fast, how often, how far. */
+export interface LeadWork {
+  /** first time the dealer's team reached out (a call or "contacted") */
+  firstContactAt: string | null;
+  calls: number;
+  connected: boolean;
+  testDriveBooked: boolean;
+  testDriveGiven: boolean;
+  model: string | null;
+}
+
+/** Reads the dealer's activity history and progress for the work done on a lead. */
+export function leadWork(lead: FeedLead): LeadWork {
+  const history = [...(lead.history ?? [])].filter(h => h.at).sort((a, b) => a.at!.localeCompare(b.at!));
+  const text = (h: { status?: string; note?: string }) => `${h.status ?? ''} ${h.note ?? ''}`;
+  const isCall = (h: { status?: string; note?: string }) => /called customer|\bcall(ed)?\b.*(connected|no answer|busy|switched off|wrong number|didn.?t go through)|call outcome/i.test(text(h));
+  const firstContact = history.find(h => isCall(h) || /marked contacted|\bcontacted\b/i.test(text(h)));
+  const td = (lead.progress?.testDriveStatus ?? '').toLowerCase();
+  const given = /^(given|done|completed)/.test(td) || history.some(h => /test ?drive (given|done|completed)|completed drive/i.test(text(h)));
+  const booked = given || /^(booked|scheduled)/.test(td) || history.some(h => /test ?drive (booked|scheduled)/i.test(text(h)));
+  const model = (lead.interest?.model ?? '').trim();
+  return {
+    firstContactAt: firstContact?.at ?? null,
+    calls: history.filter(isCall).length,
+    connected: /^connected/i.test(lead.progress?.callOutcome ?? '') || history.some(h => /\(connected\)|call:? connected|outcome:? connected/i.test(text(h))),
+    testDriveBooked: booked, testDriveGiven: given,
+    model: model && !/^vehicle inquiry$/i.test(model) ? model : null,
+  };
+}
+
 export interface JourneyUpdate {
   journeyRef: string;
   personRef: string;

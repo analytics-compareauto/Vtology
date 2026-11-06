@@ -7,6 +7,7 @@ import { DateRangePicker, rangeQuery, type Range } from '../DateRange';
 import { ImportOffline, MediaSummary, type MediaData, type MediaView, type Shared } from './AllMedia';
 import { ImportPerf, Performance } from './Performance';
 import { ImportReport, Media } from './Media';
+import { AdToCar, type AdToCarData } from './AdToCar';
 
 /**
  * The Media tab: everything a brand spends on, main and digital, in one place. It opens on the summary
@@ -19,13 +20,18 @@ export function MediaHub({ workspaceId, notify, range, onRange, canEdit, initial
   const [d, setD] = useState<MediaData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [v, setV] = useState(0); // bumps when data changes, so embedded views reload
-  const load = useCallback(() => api<MediaData>('GET', `${T}/crossmedia?${rangeQuery(range)}`).then(r => { setD(r); setErr(null); }).catch(e => setErr(e instanceof ApiError ? e.message : 'Could not load media.')), [T, range]);
+  const [a2c, setA2c] = useState<AdToCarData | null>(null);
+  const load = useCallback(() => Promise.all([
+    api<MediaData>('GET', `${T}/crossmedia?${rangeQuery(range)}`),
+    api<{ adToCar: AdToCarData | null }>('GET', `${T}/adtocar?${rangeQuery(range)}`).catch(() => ({ adToCar: null })),
+  ]).then(([r, a]) => { setD(r); setA2c(a.adToCar); setErr(null); }).catch(e => setErr(e instanceof ApiError ? e.message : 'Could not load media.')), [T, range]);
   useEffect(() => { load(); }, [load, v]);
   useEffect(() => { try { const u = new URL(window.location.href); u.searchParams.set('tab', 'media'); if (view === 'summary') u.searchParams.delete('view'); else u.searchParams.set('view', view); window.history.replaceState(null, '', u); } catch { /* ignore */ } }, [view]);
   if (err) return <div className="error-box" role="alert">{err}</div>;
   if (!d) return <div className="progress" />;
   const sh = d.picture.shared;
-  const anything = Object.values(sh).some(Boolean);
+  const anything = Object.values(sh).some(Boolean) || !!a2c;
+  const fmA = (v: number) => { try { return new Intl.NumberFormat(d.currency === 'INR' ? 'en-IN' : 'en', { style: 'currency', currency: a2c?.currency ?? d.currency, currencyDisplay: 'narrowSymbol', maximumFractionDigits: 0 }).format(v); } catch { return String(Math.round(v)); } };
   const views: { id: MediaView; label: string; show: boolean }[] = [
     { id: 'summary', label: 'Summary', show: true },
     { id: 'awareness', label: 'Awareness media', show: sh.mainline || sh.programmatic },
@@ -48,7 +54,8 @@ export function MediaHub({ workspaceId, notify, range, onRange, canEdit, initial
       {d.leftOut.length > 0 && view === 'summary' && <div className="note-box">Reports in {d.leftOut.join(', ')} are left out: amounts are compared in {d.currency} only.</div>}
 
       {view === 'summary' && (anything ? <>
-        <MediaSummary d={d} part="summary" onView={go} />
+        {a2c && <AdToCar a={a2c} fm={fmA} />}
+        {Object.values(sh).some(Boolean) && <MediaSummary d={d} part="summary" onView={go} />}
         <WhatYouGet shared={sh} compact onAdd={canEdit ? () => go('files') : undefined} />
       </> : <WhatYouGet shared={sh} onAdd={canEdit ? () => go('files') : undefined} />)}
 

@@ -14,6 +14,7 @@ import { schemaReady } from './schema';
 import { startConnect, finishConnect, socialOverview, syncTenant, syncAll, syncConnection, disconnect, growthOverview, addCompetitor, removeCompetitor } from './social';
 import { ROLES, type RoleCode } from '@vtology/core';
 import { listSources, createSource, checkSource, updateSource, deleteSource, syncSource, syncTenantSources, dueSources } from './sources';
+import { adToCar } from './adtocar';
 import { listPerf, createPerf, appendPerf, finishPerf, deletePerf, perfOverview } from './perf';
 import { listOffline, createOffline, appendOffline, finishOffline, deleteOffline, crossMediaOverview } from './crossmedia';
 import { contentOverview, addTopics, removeTopic, suggestTopics, scanTopics, videoRetention, contentTrends, refreshAllTrends, checkTrendRanksNow } from './content';
@@ -133,6 +134,7 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
     if (cv) return json(200, await videoRetention(deps, ctx, cv[1]!));
     // ---- media: DSP delivery reports for awareness analysis (CTV, audio, video, display)
     // ---- performance campaigns: Google Ads, Meta
+    if (route === 'GET adtocar') return json(200, { adToCar: await adToCar(ctx, rangeParam(url, ctx.now, 30)) });
     if (route === 'GET performance') return json(200, await perfOverview(ctx, rangeParam(url, ctx.now, 30)));
     if (route === 'GET performance/reports') return json(200, await listPerf(ctx));
     if (route === 'POST performance/reports') return json(201, await createPerf(ctx, await req.json().catch(() => ({}))));
