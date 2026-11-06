@@ -3,7 +3,7 @@
  * demand, video checks and retention curves. Built on the posts the social sync already stores, plus
  * YouTube search and analytics through the brand's own connected account.
  */
-import { DEFAULT_TOPICS, TREND_SEEDS, TREND_SUFFIXES, rankTrends, aboutTopic, outlierMetric, findOutliers, outlierPatterns, scoreTopic, videoChecks, type ContentAccount, type SocialPost, type TopicResult, type TopicVideo, type TrendItem, type Industry } from '@vtology/core';
+import { DEFAULT_TOPICS, TREND_SEEDS, TREND_SUFFIXES, rankTrends, trendTheme, aboutTopic, outlierMetric, findOutliers, outlierPatterns, scoreTopic, videoChecks, type ContentAccount, type SocialPost, type TopicResult, type TopicVideo, type TrendItem, type Industry } from '@vtology/core';
 import { HttpError, requireRole, type Ctx, type Deps } from './context';
 import { refreshSampleSocial } from './demo';
 import { youtubeToken } from './social';
@@ -152,7 +152,7 @@ export async function contentTrends(deps: Deps, ctx: Ctx) {
   let items = parse<TrendItem[]>(row?.items ?? null), at = row?.computed_at ?? null;
   if (!items?.length) { items = await refreshTrends(deps, ctx.tenantId, ctx.industry); at = new Date().toISOString(); }
   const tracked = await ctx.db.admin.query<{ phrase: string }>(`select lower(phrase) as phrase from vt.content_topics where tenant_id = $1`, [ctx.tenantId]);
-  return { computedAt: at, items, tracked: tracked.map(t => t.phrase), canEdit: EDITORS.includes(ctx.role) };
+  return { computedAt: at, items: items.map(x => ({ ...x, theme: trendTheme(x.phrase) })), tracked: tracked.map(t => t.phrase), canEdit: EDITORS.includes(ctx.role) };
 }
 
 /** Daily: refresh every real workspace whose list is older than a day (a few at a time). */

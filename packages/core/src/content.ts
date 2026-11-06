@@ -176,12 +176,12 @@ export const TREND_SUFFIXES = ['', ' 2026', ' vs', ' price', ' under', ' best', 
 
 const THEMES: [string, RegExp][] = [
   ['Comparison', /\bvs\b|versus|compar/],
-  ['Price', /price|lakh|cost|emi|₹|cheap|budget|under \d/],
-  ['Launch', /launch|upcoming|new |20\d\d|coming/],
   ['Electric', /\bev\b|electric|charging|range|battery/],
   ['Mileage', /mileage|kmpl|fuel|cng|hybrid/],
+  ['Finance', /loan|insurance|interest|credit|finance|emi\b/],
+  ['Launch', /launch|upcoming|coming|new (car|suv|bike|model)/],
   ['Review', /review|test|drive|experience|problem/],
-  ['Finance', /loan|insurance|interest|credit|finance/],
+  ['Price', /price|lakh|cost|₹|cheap|budget|under \d|showroom/],
 ];
 export function trendTheme(phrase: string): string { return THEMES.find(([, re]) => re.test(phrase))?.[0] ?? 'Other'; }
 
