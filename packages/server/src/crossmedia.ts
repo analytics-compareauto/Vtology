@@ -212,6 +212,6 @@ export async function crossMediaOverview(ctx: Ctx, range: { from: string; to: st
     picture: { spend: totalSpend, results: totalResults, perResult: totalResults ? totalSpend / totalResults : null, resultsFrom, glance, next: next.slice(0, 6), chain, shared },
     currency, leftOut, measure: lift.measure, hasResults: outcomes.length > 0, hasDigital: dig.length > 0 || perfMedia.length > 0,
     weeks, series, results, totals, lifts: lift.lifts.map(l => ({ ...l, label: label(l.medium) })), regions: regions.slice(0, 15),
-    findings, reports, canEdit: EDITORS.includes(ctx.role), weekStart: mondayOf(range.from), from: range.from, to: range.to,
+    findings, reports, canEdit: EDITORS.includes(ctx.role), workspace: ctx.tenantName, isDemo: ctx.isDemo, weekStart: mondayOf(range.from), from: range.from, to: range.to,
   };
 }

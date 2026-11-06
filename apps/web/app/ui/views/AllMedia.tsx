@@ -37,7 +37,7 @@ export interface Chain {
   convert: { spend: number; media: { medium: string; label: string; spend: number }[]; results: number; perResult: number | null; platformConversions: number | null; platformCpa: number | null };
 }
 export interface Shared { mainline: boolean; results: boolean; programmatic: boolean; search: boolean; meta: boolean; terms: boolean }
-export type MediaData = Data & { picture: Picture & { chain: Chain; shared: Shared }; from: string; to: string };
+export type MediaData = Data & { picture: Picture & { chain: Chain; shared: Shared }; from: string; to: string; workspace: string; isDemo: boolean };
 export type MediaView = 'summary' | 'awareness' | 'search' | 'files';
 
 /** The summary (and the awareness part) of the Media tab, from data the Media tab loads once. */

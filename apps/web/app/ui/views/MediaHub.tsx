@@ -60,7 +60,7 @@ export function MediaHub({ workspaceId, notify, range, onRange, canEdit, initial
       {view === 'search' && <Performance key={v} workspaceId={workspaceId} notify={notify} range={range} onRange={onRange} embedded />}
 
       {view === 'files' && <>
-        {canEdit && <AddData T={T} onDone={msg => { if (msg) notify(msg); setV(x => x + 1); }} />}
+        {canEdit && <AddData T={T} workspace={d.workspace} isDemo={d.isDemo} onDone={msg => { if (msg) notify(msg); setV(x => x + 1); }} />}
         <Files T={T} canEdit={canEdit} version={v} onChange={() => setV(x => x + 1)} />
         <WhatYouGet shared={sh} />
       </>}
@@ -71,44 +71,77 @@ export function MediaHub({ workspaceId, notify, range, onRange, canEdit, initial
 type Kind = 'search' | 'programmatic' | 'offline';
 const KIND_LABEL: Record<Kind, string> = { search: 'Google Ads or Meta', programmatic: 'DV360, programmatic or YouTube', offline: 'TV, print, radio, outdoor or results' };
 
-/** Reads a file's header to tell what it is, then hands it to the import that understands it. */
-async function whatIs(f: File): Promise<Kind> {
+interface FileCheck { kind: Kind; sample: boolean; brands: string[] }
+const BRAND_COL = /^(advertiser|advertiser name|account|account name|customer name|brand|client)$/i;
+
+/** Reads a file's header (and first rows) to tell what it is, who it is for, and whether it is one of Vtology's made-up samples. */
+async function whatIs(f: File): Promise<FileCheck> {
   let header: string[] = [];
+  let firstRows: string[][] = [];
   if (/\.xlsx$/i.test(f.name)) {
     const rows = await readXlsx(f);
     header = Object.keys(rows[0] ?? {});
+    firstRows = rows.slice(0, 200).map(r => header.map(h => String(r[h] ?? '')));
     if (!detectPerfColumns(header).cost) { const r = rows.find(x => detectPerfColumns(Object.values(x)).cost); if (r) header = Object.values(r); }
   } else if (!/\.(zip|gz)$/i.test(f.name)) {
     const buf = new Uint8Array(await f.slice(0, 65536).arrayBuffer());
     const text = buf[0] === 0xff && buf[1] === 0xfe ? new TextDecoder('utf-16le').decode(buf.subarray(2)) : new TextDecoder().decode(buf).replace(/^﻿/, '');
     const lines = text.split(/\r?\n/);
-    const line = lines[headerLineIndex(lines)] ?? '';
-    header = line.split(line.includes('\t') ? '\t' : /,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(x => x.replace(/^"|"$/g, '').trim());
+    const hi = headerLineIndex(lines);
+    const line = lines[hi] ?? '';
+    const split = (l: string) => l.split(l.includes('\t') ? '\t' : /,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(x => x.replace(/^"|"$/g, '').trim());
+    header = split(line);
+    firstRows = lines.slice(hi + 1, hi + 200).filter(Boolean).map(split);
   }
+  const sample = header.some(h => /^vtology sample$/i.test(h)) || /^sample-/i.test(f.name);
+  const bi = header.findIndex(h => BRAND_COL.test(h));
+  const brands = bi >= 0 ? [...new Set(firstRows.map(r => r[bi] ?? '').filter(Boolean))].slice(0, 8) : [];
   const pf = perfPlatform(header), pc = detectPerfColumns(header);
-  if (pf !== 'other' || (pc.term && pc.cost)) return 'search';
-  if (guessMedium(header, f.name) === 'digital') return 'programmatic';
-  if (/google.?ads|adwords|meta|facebook|search.?terms/i.test(f.name)) return 'search';
-  if (/dv360|programmatic|dsp|youtube|ctv/i.test(f.name)) return 'programmatic';
-  return 'offline';
+  const kind: Kind = pf !== 'other' || (pc.term && pc.cost) ? 'search' : guessMedium(header, f.name) === 'digital' ? 'programmatic'
+    : /google.?ads|adwords|meta|facebook|search.?terms/i.test(f.name) ? 'search' : /dv360|programmatic|dsp|youtube|ctv/i.test(f.name) ? 'programmatic' : 'offline';
+  return { kind, sample, brands };
 }
 
-function AddData({ T, onDone }: { T: string; onDone: (msg: string | null) => void }) {
+/** Does a name in the file look like this workspace's brand? ("CompareAuto" matches "Compare Auto India", "compareauto.in") */
+function sameBrand(workspace: string, name: string): boolean {
+  const n = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const w = n(workspace), x = n(name);
+  if (!w || !x) return true;
+  const first = n(workspace.split(/\s+/)[0] ?? '');
+  return x.includes(w) || w.includes(x) || (first.length >= 4 && x.includes(first));
+}
+
+function AddData({ T, onDone, workspace, isDemo }: { T: string; onDone: (msg: string | null) => void; workspace: string; isDemo: boolean }) {
   const [file, setFile] = useState<File | null>(null);
   const [kind, setKind] = useState<Kind | null>(null);
   const [over, setOver] = useState(false);
   const [n, setN] = useState(0);
+  const [stop, setStop] = useState<string | null>(null);
+  const [ask, setAsk] = useState<{ f: File; kind: Kind; brands: string[] } | null>(null);
   async function choose(f: File | undefined) {
     if (!f) return;
-    setFile(null); setKind(null);
-    const k = await whatIs(f).catch(() => 'offline' as Kind);
-    setN(x => x + 1); setFile(f); setKind(k);
+    setFile(null); setKind(null); setStop(null); setAsk(null);
+    const c = await whatIs(f).catch((): FileCheck => ({ kind: 'offline', sample: false, brands: [] }));
+    // made-up sample files never go into a real workspace
+    if (c.sample && !isDemo) { setStop(`${f.name} is one of Vtology's made-up sample files, so it can't be added to ${workspace}, a real workspace. Add it to a sample workspace instead (create one with “Sample data” ticked).`); return; }
+    // a report for another advertiser or account asks first
+    const other = c.brands.filter(b => !sameBrand(workspace, b));
+    if (other.length && other.length === c.brands.length && !isDemo) { setAsk({ f, kind: c.kind, brands: other }); return; }
+    setN(x => x + 1); setFile(f); setKind(c.kind);
   }
   const done = (msg: string | null) => { setFile(null); setKind(null); onDone(msg); };
   return (
     <section className="panel">
-      <div className="panel-head"><div><h2>Add data</h2><p>Drop any report: Vtology tells what it is from its columns and files it in the right place. One file at a time; CSV, Excel or zipped, as downloaded.</p></div></div>
-      {!file && (
+      <div className="panel-head"><div><h2>Add data to {workspace}</h2><p>Drop any report: Vtology tells what it is from its columns and files it in the right place. One file at a time; CSV, Excel or zipped, as downloaded. Only reports for {workspace} belong here.</p></div></div>
+      {stop && <div className="error-box" role="alert">{stop}</div>}
+      {ask && (
+        <div className="note-box" style={{ display: 'grid', gap: 10, borderColor: 'var(--warn)' }}>
+          <span><b>{ask.f.name}</b> is for <b>{ask.brands.join(', ')}</b>, not {workspace}. Reports for another brand belong in that brand’s own workspace, so its numbers never mix with {workspace}’s.</span>
+          <div className="toolbar"><button className="btn primary" onClick={() => setAsk(null)}>Don’t add it</button>
+            <button className="btn" onClick={() => { const a = ask; setAsk(null); setN(x => x + 1); setFile(a.f); setKind(a.kind); }}>It is for {workspace}: add it</button></div>
+        </div>
+      )}
+      {!file && !ask && (
         <label className={`dropzone big ${over ? 'over' : ''}`} onDragOver={e => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={e => { e.preventDefault(); setOver(false); choose(e.dataTransfer.files[0]); }}>
           <input type="file" accept=".csv,.tsv,.txt,.xlsx,.zip,.gz" onChange={e => choose(e.target.files?.[0])} style={{ display: 'none' }} />
           <b>Drop a report here, or click to choose</b>
@@ -118,7 +151,7 @@ function AddData({ T, onDone }: { T: string; onDone: (msg: string | null) => voi
       {file && kind && (
         <div style={{ display: 'grid', gap: 12 }}>
           <div className="kind-pick">
-            <span><b>{file.name}</b> looks like a <b>{KIND_LABEL[kind]}</b> report.</span>
+            <span><b>{file.name}</b> looks like a <b>{KIND_LABEL[kind]}</b> report, to be added to <b>{workspace}</b>.</span>
             <div className="toolbar" style={{ gap: 6 }}><span className="small muted">Not right?</span>{(Object.keys(KIND_LABEL) as Kind[]).filter(k => k !== kind).map(k => <button key={k} className="btn small" onClick={() => { setKind(k); setN(x => x + 1); }}>It’s {KIND_LABEL[k]}</button>)}
               <button className="btn small link" onClick={() => { setFile(null); setKind(null); }}>Choose another file</button></div>
           </div>
