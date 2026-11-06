@@ -616,7 +616,7 @@ td.num, th.num { white-space: nowrap; }
 .trend-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr)); column-gap: 24px; }
 .trend-list li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto 80px 40px 64px; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); }
 .trend-rank { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; font-size: 13px; }
-.trend-phrase { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.trend-phrase { overflow: hidden; font-weight: 500; min-width: 0; }
 .trend-bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
 .trend-bar i { display: block; height: 100%; background: var(--flow); border-radius: 3px; }
 .trend-move { font-size: 12px; font-weight: 600; white-space: nowrap; color: var(--muted); }
@@ -631,3 +631,12 @@ td.num, th.num { white-space: nowrap; }
 .ig-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .ig-head b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ig-ratio { margin-left: auto; font-weight: 700; white-space: nowrap; font-size: 13px; }
+.trend-phrase { display: grid; gap: 3px; }
+.trend-ranks { display: flex; flex-wrap: wrap; gap: 4px; font-size: 12px; font-weight: 400; white-space: normal; }
+.trend-ranks .tag { font-size: 11px; padding: 1px 7px; }
+.trend-who { display: grid; gap: 6px; margin: 0 0 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; max-width: 720px; }
+.trend-who-row { display: grid; grid-template-columns: minmax(0, 180px) minmax(0, 1fr) 110px; gap: 10px; align-items: center; }
+.trend-who-bar { display: flex; height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; gap: 2px; }
+.trend-who-bar i, .trend-who .key { display: block; height: 100%; }
+.t5 { background: var(--flow); } .t20 { background: color-mix(in srgb, var(--flow) 40%, transparent); }
+.trend-who .key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin: 0 4px 0 8px; }

@@ -63,5 +63,9 @@ export const MIGRATIONS: { id: string; sql: string }[] = [
   {
     "id": "20261106000016_content_trends",
     "sql": "-- The top searches in a brand's category on YouTube, refreshed daily (from YouTube's own suggestions).\ncreate table if not exists vt.content_trends (\n  tenant_id uuid primary key references vt.tenants(id) on delete cascade,\n  computed_at timestamptz not null default now(),\n  items jsonb not null,\n  previous jsonb\n);\nalter table vt.content_trends enable row level security;\n"
+  },
+  {
+    "id": "20261106000017_trend_ranks",
+    "sql": "-- Who ranks in YouTube's top 20 for each of the category's top searches (checked a few a day, each weekly).\nalter table vt.content_trends add column if not exists ranks jsonb not null default '{}'::jsonb;\n"
   }
 ];

@@ -271,21 +271,35 @@ function Pager({ pages, page, onPage, label }: { pages: number; page: number; on
   );
 }
 
-interface Trend { phrase: string; score: number; theme: string; rank: number; previousRank: number | null; seeds: number }
+interface Trend { phrase: string; score: number; theme: string; rank: number; previousRank: number | null; seeds: number; checkedAt: string | null; first: string | null; ranks: { id: string; name: string; own: boolean; rank: number }[] | null }
+interface Trends { computedAt: string | null; items: Trend[]; canEdit: boolean; youtubeConnected: boolean; accounts: { id: string; name: string; own: boolean }[] }
 
 /** The category's top 100 searches on YouTube, refreshed daily, 20 to a page, with one click to track any of them. */
 function Trending({ T, canEdit, tracked, onAdd, onRemove }: { T: string; canEdit: boolean; tracked: Map<string, string>; onAdd: (p: string[]) => void; onRemove: (id: string) => void }) {
-  const [r, setR] = useState<{ computedAt: string | null; items: Trend[] } | null>(null);
+  const [r, setR] = useState<Trends | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [theme, setTheme] = useState<string | null>(null);
-  useEffect(() => { api<{ computedAt: string | null; items: Trend[] }>('GET', `${T}/content/trends`).then(setR).catch(e => setErr(e instanceof ApiError ? e.message : 'Could not load the top searches.')); }, [T]);
+  const loadTrends = useCallback(() => api<Trends>('GET', `${T}/content/trends`).then(x => { setR(x); return x; }), [T]);
+  useEffect(() => {
+    loadTrends().then(x => {
+      // the top searches not yet checked for who ranks: check the next few now (the daily job does the rest)
+      if (x.canEdit && x.youtubeConnected && x.items.slice(0, 20).some(i => !i.checkedAt))
+        api<{ checked: number }>('POST', `${T}/content/trends/ranks`, {}).then(c => { if (c.checked) loadTrends(); }).catch(() => undefined);
+    }).catch(e => setErr(e instanceof ApiError ? e.message : 'Could not load the top searches.'));
+  }, [loadTrends, T]);
   useEffect(() => { setPage(0); }, [theme]);
   const themes = r ? [...r.items.reduce((m, x) => m.set(x.theme, (m.get(x.theme) ?? 0) + 1), new Map<string, number>())].sort((a, b) => b[1] - a[1]) : [];
   const list = r ? r.items.filter(x => !theme || x.theme === theme) : [];
   const pages = Math.max(1, Math.ceil(list.length / 20));
   const shown = list.slice(page * 20, page * 20 + 20);
   const hadBefore = !!r?.items.some(x => x.previousRank !== null);
+  // who shows up across the checked searches of this kind
+  const checked = list.filter(x => x.ranks);
+  const showsUp = r ? r.accounts.map(a => {
+    const rs = checked.map(x => x.ranks!.find(k => k.id === a.id)?.rank).filter((k): k is number => k !== undefined);
+    return { ...a, in20: rs.length, top5: rs.filter(k => k <= 5).length, best: rs.length ? Math.min(...rs) : null };
+  }).sort((a, b) => b.in20 - a.in20 || b.top5 - a.top5) : [];
   return (
     <section className="panel">
       <div className="panel-head"><div><h2>Top 100 searches in your category on YouTube</h2><p>What people type most, ranked by how high YouTube suggests it, worked out again every day.{r?.computedAt ? ` Updated ${ago(r.computedAt)}.` : ''} Track a search to have it searched every week and see where you and competitors rank (shown in the next section); Untrack stops it.</p></div></div>
@@ -295,6 +309,21 @@ function Trending({ T, canEdit, tracked, onAdd, onRemove }: { T: string; canEdit
             <button aria-pressed={!theme} onClick={() => setTheme(null)}>All <b>{r.items.length}</b></button>
             {themes.map(([k, n]) => <button key={k} aria-pressed={theme === k} onClick={() => setTheme(theme === k ? null : k)}>{k} <b>{n}</b></button>)}
           </div>
+          {checked.length > 0 && showsUp.length > 0 && (
+            <div className="trend-who">
+              <b className="small">Who shows up in the top 20, across {checked.length} {theme ? `${theme.toLowerCase()} ` : ''}{checked.length === 1 ? 'search' : 'searches'} checked</b>
+              {showsUp.map(a => (
+                <div className="trend-who-row" key={a.id}>
+                  <span className="clamp1">{a.name}{a.own && <span className="tag ok" style={{ marginLeft: 6 }}>You</span>}</span>
+                  <span className="trend-who-bar" title={`${a.top5} in the top 5, ${a.in20 - a.top5} more in the top 20`}>
+                    <i className="t5" style={{ width: `${(a.top5 / checked.length) * 100}%` }} /><i className="t20" style={{ width: `${((a.in20 - a.top5) / checked.length) * 100}%` }} />
+                  </span>
+                  <span className="small">{a.in20} of {checked.length}{a.best ? `, best #${a.best}` : ''}</span>
+                </div>
+              ))}
+              <span className="small muted"><i className="key t5" /> top 5 <i className="key t20" /> 6 to 20</span>
+            </div>
+          )}
           <ol className="trend-list">
             {shown.map(x => {
               const trackedId = tracked.get(x.phrase);
@@ -302,7 +331,11 @@ function Trending({ T, canEdit, tracked, onAdd, onRemove }: { T: string; canEdit
               return (
                 <li key={x.phrase}>
                   <span className="trend-rank">{x.rank}</span>
-                  <span className="trend-phrase" title={x.phrase}>{x.phrase}</span>
+                  <span className="trend-phrase" title={x.phrase}>{x.phrase}
+                    <span className="trend-ranks">{!x.ranks ? <span className="muted">Rankings not checked yet</span>
+                      : x.ranks.length ? x.ranks.map(k => <span key={k.id} className={`tag ${k.own ? 'ok' : k.rank <= 5 ? 'warn' : 'plain'}`}>{k.own ? 'You' : k.name} #{k.rank}</span>)
+                      : <span className="muted">No one you follow in the top 20{x.first ? `; No. 1 is ${x.first}` : ''}</span>}</span>
+                  </span>
                   <span className="tag plain trend-theme">{x.theme}</span>
                   <span className="trend-bar" title={`${x.score} of 100`}><i style={{ width: `${x.score}%` }} /></span>
                   <span className={`trend-move ${move === 'new' || (typeof move === 'number' && move > 0) ? 'up' : typeof move === 'number' && move < 0 ? 'down' : ''}`}>{move === 'new' ? 'New' : typeof move === 'number' && move !== 0 ? `${move > 0 ? '▲' : '▼'}${Math.abs(move)}` : ''}</span>

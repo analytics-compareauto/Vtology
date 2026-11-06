@@ -125,7 +125,10 @@ async function ytSuggest(deps: Deps, q: string): Promise<string[]> {
 }
 
 const TREND_HOURS = 20;
-type TrendRow = { computed_at: string; items: TrendItem[] | string; previous: TrendItem[] | string | null };
+type TrendRow = { computed_at: string; items: TrendItem[] | string; previous: TrendItem[] | string | null; ranks?: Record<string, TrendRank> | string | null };
+/** one search's top 20: the tracked accounts found in it (best position each) and who is No. 1 */
+type TrendRank = { at: string; hits: { id: string; rank: number }[]; first: string | null };
+const RANK_DAYS = 7, RANKS_PER_DAY = 15;
 const parse = <T,>(x: T | string | null): T | null => (typeof x === 'string' ? (() => { try { return JSON.parse(x) as T; } catch { return null; } })() : x);
 
 /** Work out the category's top searches again: every seed (and the brand's tracked phrases) through a few endings. Free: no YouTube quota. */
@@ -148,11 +151,68 @@ export async function refreshTrends(deps: Deps, tenantId: string, industry: Indu
 /** The top 100 searches in the category (worked out on first look, then daily by the scheduled job). */
 export async function contentTrends(deps: Deps, ctx: Ctx) {
   requireRole(ctx, VIEWERS, 'Content insights');
-  const [row] = await ctx.db.admin.query<TrendRow>(`select computed_at, items, previous from vt.content_trends where tenant_id = $1`, [ctx.tenantId]);
+  const sql = ctx.db.admin;
+  const [row] = await sql.query<TrendRow>(`select computed_at, items, previous, ranks from vt.content_trends where tenant_id = $1`, [ctx.tenantId]);
   let items = parse<TrendItem[]>(row?.items ?? null), at = row?.computed_at ?? null;
   if (!items?.length) { items = await refreshTrends(deps, ctx.tenantId, ctx.industry); at = new Date().toISOString(); }
-  const tracked = await ctx.db.admin.query<{ phrase: string }>(`select lower(phrase) as phrase from vt.content_topics where tenant_id = $1`, [ctx.tenantId]);
-  return { computedAt: at, items: items.map(x => ({ ...x, theme: trendTheme(x.phrase) })), tracked: tracked.map(t => t.phrase), canEdit: EDITORS.includes(ctx.role) };
+  const ranks = parse<Record<string, TrendRank>>(row?.ranks ?? null) ?? {};
+  const tracked = await sql.query<{ phrase: string; id: string }>(`select lower(phrase) as phrase, id from vt.content_topics where tenant_id = $1`, [ctx.tenantId]);
+  const accounts = await sql.query<{ id: string; name: string; is_competitor: boolean }>(`select id, name, is_competitor from vt.social_accounts where tenant_id = $1 and platform = 'youtube'`, [ctx.tenantId]);
+  const acc = new Map(accounts.map(a => [a.id, a]));
+  const conn = await sql.query(`select 1 from vt.social_connections where tenant_id = $1 and provider = 'youtube'`, [ctx.tenantId]);
+  return {
+    computedAt: at, tracked: tracked.map(t => t.phrase), canEdit: EDITORS.includes(ctx.role), youtubeConnected: conn.length > 0 || ctx.isDemo,
+    accounts: accounts.map(a => ({ id: a.id, name: a.name, own: !a.is_competitor })),
+    items: items.map(x => {
+      const r = ranks[x.phrase];
+      return { ...x, theme: trendTheme(x.phrase), checkedAt: r?.at ?? null, first: r?.first ?? null,
+        ranks: r ? r.hits.filter(h => acc.has(h.id)).map(h => ({ id: h.id, name: acc.get(h.id)!.name, own: !acc.get(h.id)!.is_competitor, rank: h.rank })).sort((a, b) => a.rank - b.rank) : null };
+    }),
+  };
+}
+
+/** Check who ranks for the next few top searches not checked this week (highest first). Uses the brand's YouTube allowance: 100 units a search. */
+export async function checkTrendRanks(deps: Deps, tenantId: string, opts: { limit?: number; isDemo?: boolean } = {}) {
+  const sql = deps.db.admin;
+  const [row] = await sql.query<TrendRow>(`select computed_at, items, previous, ranks from vt.content_trends where tenant_id = $1`, [tenantId]);
+  const items = parse<TrendItem[]>(row?.items ?? null) ?? [];
+  const ranks = parse<Record<string, TrendRank>>(row?.ranks ?? null) ?? {};
+  const fresh = (p: string) => ranks[p] && Date.now() - Date.parse(ranks[p]!.at) < RANK_DAYS * 86_400_000;
+  const due = items.filter(x => !fresh(x.phrase)).slice(0, opts.limit ?? RANKS_PER_DAY);
+  if (!due.length) return { checked: 0 };
+  const accounts = await sql.query<{ id: string; external_id: string; name: string }>(`select id, external_id, name from vt.social_accounts where tenant_id = $1 and platform = 'youtube'`, [tenantId]);
+  const byChannel = new Map(accounts.map(a => [a.external_id, a.id]));
+  const save = async (phrase: string, r: TrendRank) => {
+    ranks[phrase] = r;
+    await sql.query(`update vt.content_trends set ranks = ranks || $2::jsonb where tenant_id = $1`, [tenantId, JSON.stringify({ [phrase]: r })]);
+  };
+  let checked = 0;
+  if (opts.isDemo) {
+    for (const x of due) {
+      let h = 0; for (const c of x.phrase) h = (h * 31 + c.charCodeAt(0)) % 9973;
+      await save(x.phrase, { at: new Date().toISOString(), first: ['Auto Review Hub', 'Gaadi Guide', 'Drive Talk'][h % 3]!, hits: accounts.filter((_, i) => (h + i * 7) % 3 !== 0).map((a, i) => ({ id: a.id, rank: 1 + ((h + i * 5) % 20) })) });
+      checked++;
+    }
+    return { checked };
+  }
+  const yt = await youtubeToken(deps, tenantId);
+  if (!yt) return { checked: 0, reason: 'YouTube not connected' };
+  for (const x of due) {
+    try {
+      const s = await getJson<{ items?: { snippet?: { channelId?: string; channelTitle?: string } }[] }>(deps, `${Y}/search?part=snippet&type=video&maxResults=20&order=relevance&regionCode=IN&relevanceLanguage=en&q=${encodeURIComponent(x.phrase)}`, yt.token);
+      const list = s.items ?? [];
+      const hits = new Map<string, number>();
+      list.forEach((it, i) => { const id = byChannel.get(it.snippet?.channelId ?? ''); if (id && !hits.has(id)) hits.set(id, i + 1); });
+      await save(x.phrase, { at: new Date().toISOString(), first: list[0]?.snippet?.channelTitle ?? null, hits: [...hits].map(([id, rank]) => ({ id, rank })) });
+      checked++;
+    } catch (e) { if (e instanceof HttpError && e.status === 429) break; }
+  }
+  return { checked };
+}
+
+export async function checkTrendRanksNow(deps: Deps, ctx: Ctx) {
+  requireRole(ctx, EDITORS, 'Scanning topics');
+  return checkTrendRanks(deps, ctx.tenantId, { limit: 10, isDemo: ctx.isDemo });
 }
 
 /** Daily: refresh every real workspace whose list is older than a day (a few at a time). */
@@ -162,7 +222,11 @@ export async function refreshAllTrends(deps: Deps) {
       where not t.is_demo and (c.computed_at is null or c.computed_at < now() - interval '${TREND_HOURS} hours') order by c.computed_at nulls first limit 6`);
   let ok = 0;
   for (const t of due) { try { await refreshTrends(deps, t.id, t.industry); ok++; } catch { /* next run */ } }
-  return { due: due.length, ok };
+  // then who ranks: a few searches a day for each workspace with YouTube connected
+  const yt = await deps.db.admin.query<{ tenant_id: string }>(`select distinct c.tenant_id from vt.social_connections c join vt.content_trends t on t.tenant_id = c.tenant_id where c.provider = 'youtube' limit 10`);
+  let ranked = 0;
+  for (const t of yt) { try { ranked += (await checkTrendRanks(deps, t.tenant_id)).checked; } catch { /* next run */ } }
+  return { due: due.length, ok, ranked };
 }
 
 /** Search YouTube for each topic due for a scan (or the ones asked for) and score what comes back. */

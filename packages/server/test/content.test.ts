@@ -11,7 +11,7 @@ let calls: string[] = [];
 const yt = (async (input: string | URL) => {
   const u = new URL(String(input)); calls.push(u.pathname + u.search);
   if (u.hostname === 'suggestqueries.google.com') { const q = u.searchParams.get('q')!; return Response.json([q, [`${q} 2026`, `${q} price in india`, 'creta vs seltos', 'ev', `${q} review`]]); }
-  if (u.pathname.endsWith('/search')) return Response.json({ items: [1, 2, 3, 4, 5, 6].map(i => ({ id: { videoId: `v${i}` } })) });
+  if (u.pathname.endsWith('/search')) return Response.json({ items: [1, 2, 3, 4, 5, 6].map(i => ({ id: { videoId: `v${i}` }, snippet: { channelId: i === 2 ? 'UC-carwale' : i === 4 ? 'UC-own' : `UC-${i}`, channelTitle: i === 2 ? 'CarWale' : `Channel ${i}` } })) });
   if (u.pathname.endsWith('/videos')) return Response.json({ items: [1, 2, 3, 4, 5, 6].map(i => ({ id: `v${i}`, snippet: { title: `Video ${i}`, channelId: i === 2 ? 'UC-carwale' : i === 4 ? 'UC-own' : `UC-${i}`, channelTitle: i === 2 ? 'CarWale' : `Channel ${i}`, publishedAt: new Date(NOW.getTime() - i * 200 * 86_400_000).toISOString() }, statistics: { viewCount: String(100_000 * (7 - i)) } })) });
   if (u.pathname.endsWith('/channels')) return Response.json({ items: u.searchParams.get('id')!.split(',').map(id => ({ id, statistics: { subscriberCount: id === 'UC-own' ? '50000' : '900000' } })) });
   return new Response('{}', { status: 404 });
@@ -100,6 +100,16 @@ describe('content tab', () => {
     calls = [];
     expect((await call(token, 'POST', `${T}/content/topics/scan`, {})).body.scanned).toBe(0);
     expect((await call(token, 'POST', `${T}/content/topics/scan`, { ids: [t.id] })).body.scanned).toBe(1);
+    // the category's top searches: who ranks in each, a few at a time, each once a week
+    expect((await call(token, 'GET', `${T}/content/trends`)).body.items[0].ranks).toBe(null);
+    calls = [];
+    expect((await call(token, 'POST', `${T}/content/trends/ranks`, {})).body.checked).toBe(10);
+    expect(calls.filter(c => c.startsWith('/youtube/v3/search')).length).toBe(10);
+    const tr = (await call(token, 'GET', `${T}/content/trends`)).body;
+    expect(tr.items[0].ranks).toEqual([{ id: expect.any(String), name: 'CarWale', own: false, rank: 2 }, { id: expect.any(String), name: 'CompareAuto', own: true, rank: 4 }]);
+    expect(tr.items[0].first).toBe('Channel 1');
+    expect(tr.items[10].ranks).toBe(null);
+    expect((await call(token, 'POST', `${T}/content/trends/ranks`, {})).body.checked).toBe(10); // the next 10
   });
 });
 

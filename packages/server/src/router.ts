@@ -14,7 +14,7 @@ import { schemaReady } from './schema';
 import { startConnect, finishConnect, socialOverview, syncTenant, syncAll, syncConnection, disconnect, growthOverview, addCompetitor, removeCompetitor } from './social';
 import { ROLES, type RoleCode } from '@vtology/core';
 import { listSources, createSource, updateSource, deleteSource, syncSource, syncTenantSources, dueSources } from './sources';
-import { contentOverview, addTopics, removeTopic, suggestTopics, scanTopics, videoRetention, contentTrends, refreshAllTrends } from './content';
+import { contentOverview, addTopics, removeTopic, suggestTopics, scanTopics, videoRetention, contentTrends, refreshAllTrends, checkTrendRanksNow } from './content';
 import { healthSummary } from './health';
 import { listReports, createReport, appendMediaRows, finishReport, deleteReport, mediaOverview } from './media';
 import { listAudiences, createList, appendRows, finishList, deleteList, createBucket, updateBucket, previewBucket, deleteBucket, computeBucket, exportBucket, purgeAllExpired } from './audiences';
@@ -74,7 +74,7 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
         console.log(`[vtology] daily sync, connection ${one}: ${r.accounts} accounts, ${r.posts} posts${r.warnings.length ? `; ${r.warnings.length} warnings` : ''}`);
         return json(200, r);
       }
-      const [r, s, purged, trends] = await Promise.all([syncAll(deps, { selfUrl: deps.social?.publicUrl, internalKey }), syncAllSources(deps, { selfUrl: deps.social?.publicUrl, internalKey }), purgeAllExpired(deps), refreshAllTrends(deps).catch(() => ({ due: 0, ok: 0 }))]);
+      const [r, s, purged, trends] = await Promise.all([syncAll(deps, { selfUrl: deps.social?.publicUrl, internalKey }), syncAllSources(deps, { selfUrl: deps.social?.publicUrl, internalKey }), purgeAllExpired(deps), refreshAllTrends(deps).catch(() => ({ due: 0, ok: 0, ranked: 0 }))]);
       console.log(`[vtology] daily sync: ${r.started} connections due, ${r.ok} synced, ${r.failed} failed; ${s.started} data sources due, ${s.ok} pulled, ${s.failed} failed; ${purged} expired audience lists deleted; top searches refreshed for ${trends.ok} of ${trends.due} workspaces`);
       return json(200, { ...r, sources: s, expiredLists: purged, trends });
     }
@@ -122,6 +122,7 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
     if (route === 'POST content/topics') return json(201, await addTopics(ctx, await req.json().catch(() => ({}))));
     if (route === 'POST content/topics/scan') return json(200, await scanTopics(deps, ctx, await req.json().catch(() => ({}))));
     if (route === 'GET content/trends') return json(200, await contentTrends(deps, ctx));
+    if (route === 'POST content/trends/ranks') return json(200, await checkTrendRanksNow(deps, ctx));
     if (route === 'GET content/topics/suggest') return json(200, await suggestTopics(deps, ctx, url.searchParams.get('q') ?? ''));
     const ct = route.match(/^DELETE content\/topics\/([0-9a-f-]{36})$/);
     if (ct) return json(200, await removeTopic(ctx, ct[1]!));
