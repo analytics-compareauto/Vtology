@@ -4,7 +4,7 @@
  * reach by medium and week, results by week, the lift for each medium, and where each medium ran
  * against where results came from.
  */
-import { OFFLINE_LABEL, CHANNEL_LABEL, crossFindings, mediaLift, regionFit, mondayOf, type MediumWeek, type OfflineMedium, type OutcomeWeek } from '@vtology/core';
+import { OFFLINE_LABEL, CHANNEL_LABEL, crossFindings, mediaLift, regionFit, vehicleVerdicts, namedPlan, mondayOf, type MediumWeek, type OfflineMedium, type OutcomeWeek } from '@vtology/core';
 import { HttpError, requireRole, type Ctx } from './context';
 const compact = (n: number) => (n >= 1e7 ? `${(n / 1e7).toFixed(1)} crore` : n >= 1e5 ? `${(n / 1e5).toFixed(1)} lakh` : Math.round(n).toLocaleString('en-IN'));
 import { moneyFormat } from './media';
@@ -179,6 +179,15 @@ export async function crossMediaOverview(ctx: Ctx, range: { from: string; to: st
   const dark = regions.filter(r => r.resultShare >= 0.05 && r.spend === 0);
   if (dark.length) next.push({ tone: 'neutral', text: `${dark.slice(0, 3).map(r => r.region).join(', ')} ${dark.length === 1 ? 'brings' : 'bring'} ${Math.round(dark.reduce((a, r) => a + r.resultShare, 0) * 100)}% of ${lift.measure} with no local media: test a small local burst.`, tab: 'summary' });
 
+  // ---- by name: every channel, paper, station and site, and the plan that moves money between them
+  const veh = await sql.query<{ week: string; medium: string; vehicle: string; region: string; spend: string; reach: string }>(
+    `select date_trunc('week', d.day)::date::text as week, r.medium, d.vehicle, d.region, sum(d.spend) as spend, sum(d.reach) as reach
+       from vt.offline_daily d join vt.offline_reports r on r.id = d.report_id
+      where d.tenant_id = $1 and r.status = 'ready' and r.medium <> 'results' and r.currency = $4 and d.day between $2::date and $3::date group by 1, 2, 3, 4`, [ctx.tenantId, range.from, range.to, currency]);
+  const verdicts = outcomes.length ? vehicleVerdicts(veh.map(x => ({ week: x.week, medium: x.medium, vehicle: x.vehicle, region: x.region, spend: Number(x.spend), reach: Number(x.reach) })), outcomes, lift.measure) : [];
+  const plan = verdicts.length ? namedPlan(verdicts, new Set(veh.map(x => x.week)).size) : null;
+  const byName = verdicts.length ? { verdicts: verdicts.map(v => ({ ...v, mediumLabel: label(v.medium) })), plan: plan && { ...plan, moves: plan.moves.map(m => ({ ...m, mediumLabel: label(m.medium) })), monthlyResults: totalResults / Math.max(1, weeks.length) * 4.33 } } : null;
+
   // ---- the chain: aware → look for you (brand searches) → lead or sale
   const aware = totals.filter(t => jobOf(t.medium) === 'aware'), convert = totals.filter(t => jobOf(t.medium) === 'convert');
   const grps = off.filter(o => o.medium === 'tv' && o.currency === currency).reduce((a, o) => a + Number(o.reach), 0);
@@ -209,6 +218,7 @@ export async function crossMediaOverview(ctx: Ctx, range: { from: string; to: st
   const shared = { mainline: off.some(o => o.medium !== 'results'), results: resultsFrom === 'file', programmatic: dig.length > 0, search: perfMedia.some(x => jobOf(x.medium) === 'convert' && x.medium !== 'perf:Meta'), meta: perfMedia.some(x => x.medium === 'perf:Meta'), terms: !!p?.hasTerms };
 
   return {
+    byName,
     picture: { spend: totalSpend, results: totalResults, perResult: totalResults ? totalSpend / totalResults : null, resultsFrom, glance, next: next.slice(0, 6), chain, shared },
     currency, leftOut, measure: lift.measure, hasResults: outcomes.length > 0, hasDigital: dig.length > 0 || perfMedia.length > 0,
     weeks, series, results, totals, lifts: lift.lifts.map(l => ({ ...l, label: label(l.medium) })), regions: regions.slice(0, 15),

@@ -37,7 +37,10 @@ export interface Chain {
   convert: { spend: number; media: { medium: string; label: string; spend: number }[]; results: number; perResult: number | null; platformConversions: number | null; platformCpa: number | null };
 }
 export interface Shared { mainline: boolean; results: boolean; programmatic: boolean; search: boolean; meta: boolean; terms: boolean }
-export type MediaData = Data & { picture: Picture & { chain: Chain; shared: Shared }; from: string; to: string; workspace: string; isDemo: boolean };
+interface Verdict { medium: string; mediumLabel: string; vehicle: string; region: string; spend: number; reach: number; weeksOn: number; weeksOff: number; costPerReach: number | null; reachIndex: number | null; on: number | null; off: number | null; lift: number | null; costPerExtra: number | null; verdict: 'add' | 'keep' | 'cut' | 'trim' | 'test'; why: string }
+interface Move { action: 'add' | 'cut' | 'trim'; medium: string; mediumLabel: string; vehicle: string; region: string; perMonth: number; why: string; extraPerMonth: number; costPerExtra?: number | null }
+export interface ByName { verdicts: Verdict[]; plan: { moves: Move[]; freed: number; extra: number; monthlyResults: number } | null }
+export type MediaData = Data & { byName: ByName | null } & { picture: Picture & { chain: Chain; shared: Shared }; from: string; to: string; workspace: string; isDemo: boolean };
 export type MediaView = 'summary' | 'awareness' | 'search' | 'files';
 
 /** The summary (and the awareness part) of the Media tab, from data the Media tab loads once. */
@@ -63,6 +66,7 @@ export function MediaSummary({ d, part, onView }: { d: MediaData; part: 'summary
             </div>
           ))}</div>
         </section>
+        {d.byName && d.byName.verdicts.length > 0 && <VehicleTable b={d.byName} fm={fm} unit={unit} />}
         {awareLifts.length > 0 && <section className="panel"><div className="panel-head"><div><h2>What they did</h2><p>{unit[0]!.toUpperCase() + unit.slice(1)} a week when each ran against when it didn’t: lift, not exact credit, since offline media have no clicks.</p></div></div>
           <div className="insight-grid">{awareLifts.map((f, i) => <Card key={i} f={f} />)}</div></section>}
       </>
@@ -71,6 +75,7 @@ export function MediaSummary({ d, part, onView }: { d: MediaData; part: 'summary
   return (
     <>
       <ChainView c={p.chain} fm={fm} unit={p.resultsFrom === 'platforms' ? 'online conversions' : unit} resultsFrom={p.resultsFrom} onView={onView} shared={p.shared} />
+      {d.byName?.plan && d.byName.plan.moves.length > 0 && <NamedPlan b={d.byName} fm={fm} unit={unit} onView={onView} />}
       <Glance p={p} fm={fm} onView={onView} />
       {d.weeks.length > 1 && <WeekTable d={d} fm={fm} unit={p.resultsFrom === 'platforms' ? 'online conversions' : unit} />}
       {d.hasResults && d.lifts.length > 0 && (
@@ -153,6 +158,54 @@ function WeekTable({ d, fm, unit }: { d: MediaData; fm: (v: number) => string; u
         ))}
       </div>
       <div className="wstack-legend" style={{ marginTop: 10 }}>{d.series.map(s => <span key={s.medium}><i style={{ background: MEDIUM_COLOR[s.medium] ?? 'var(--muted)' }} />{s.label}</span>)}</div>
+    </section>
+  );
+}
+
+const ACT: Record<string, { text: string; tone: string }> = { add: { text: 'Add', tone: 'ok' }, keep: { text: 'Keep', tone: 'flow' }, cut: { text: 'Cut', tone: 'leak' }, trim: { text: 'Trim', tone: 'warn' }, test: { text: 'Test', tone: 'plain' } };
+const vname = (x: { vehicle: string; region: string }) => `${x.vehicle || 'Unnamed'}${x.region && x.region !== 'All India' ? `, ${x.region}` : x.region === 'All India' ? ', national' : ''}`;
+
+/** Next month, the same budget, by name: what to cut, trim and add, with the leads it should bring. */
+function NamedPlan({ b, fm, unit, onView }: { b: ByName; fm: (v: number) => string; unit: string; onView: (v: MediaView) => void }) {
+  const p = b.plan!;
+  const gain = p.monthlyResults ? p.extra / p.monthlyResults : 0;
+  return (
+    <section className="panel plan-hero">
+      <div className="plan-head">
+        <div><h2>Next month, by name</h2><p>The same budget for TV, print, radio and outdoor: {fm(p.freed)} a month moved from what didn’t move {unit} in its region to what did.</p></div>
+        {p.extra >= 1 && <div className="plan-big"><b>+{Math.round(p.extra).toLocaleString('en-IN')}</b><span>{unit} a month{gain ? ` (+${pct(gain)})` : ''}</span></div>}
+      </div>
+      <div className="plan-rows">{p.moves.map(m => (
+        <div className="plan-row" key={`${m.action}${m.vehicle}${m.region}`}>
+          <span className={`tag ${ACT[m.action]!.tone}`}>{ACT[m.action]!.text}</span>
+          <span className="plan-name"><b className="clamp1"><span className="dot" style={{ background: MEDIUM_COLOR[m.medium] ?? 'var(--muted)' }} />{vname(m)}</b><span className="small muted">{m.mediumLabel} · {m.costPerExtra ? `${fm(m.costPerExtra)} per extra ${unit.replace(/s$/, '')}; ` : ''}{m.why}</span></span>
+          <span className="plan-money">{m.action === 'add' ? '+' : '−'}{fm(m.perMonth)} a month</span>
+          <span className="small plan-conv">{m.extraPerMonth >= 1 ? `+${Math.round(m.extraPerMonth)} ${unit}` : ''}</span>
+        </div>
+      ))}</div>
+      <p className="small muted" style={{ margin: '10px 0 0' }}>An estimate: each channel, paper, station or site is judged on {unit} in its own region in the weeks it ran; added money is assumed to work 30% less well than it does now. <button className="btn small link" onClick={() => onView('awareness')}>See every one</button></p>
+    </section>
+  );
+}
+
+/** Every channel, paper, station and site: what it cost, what its reach cost, and what it did in its region. */
+function VehicleTable({ b, fm, unit }: { b: ByName; fm: (v: number) => string; unit: string }) {
+  const max = Math.max(...b.verdicts.map(v => v.spend), 1);
+  return (
+    <section className="panel">
+      <div className="panel-head"><div><h2>Every channel, paper, station and site</h2><p>Regional buys are judged on {unit} in their own region in the weeks they ran; national ones, and ones that ran every week, on what their reach cost against the rest of their medium.</p></div></div>
+      <div className="veh-table">
+        <div className="veh-row head"><span>Name</span><span>Spend</span><span className="num">Reach cost</span><span>In its region</span><span>Verdict</span></div>
+        {b.verdicts.map(v => (
+          <div className="veh-row" key={`${v.medium}${v.vehicle}${v.region}`}>
+            <span className="plan-name"><b className="clamp1"><span className="dot" style={{ background: MEDIUM_COLOR[v.medium] ?? 'var(--muted)' }} />{vname(v)}</b><span className="small muted">{v.mediumLabel} · {v.weeksOn} weeks</span></span>
+            <span className="glance-spend"><span className="camp-bar"><i style={{ width: `${(v.spend / max) * 100}%`, background: MEDIUM_COLOR[v.medium] ?? 'var(--muted)' }} /></span><span className="small">{fm(v.spend)}</span></span>
+            <span className="num small">{v.reachIndex !== null ? <b style={{ color: v.reachIndex >= 1.4 ? 'var(--leak)' : v.reachIndex <= 0.75 ? 'var(--ok)' : undefined }}>{v.reachIndex.toFixed(1)}× avg</b> : '–'}</span>
+            <span className="small">{v.lift !== null ? <><b style={{ color: v.lift >= 0.08 ? 'var(--ok)' : 'var(--leak)' }}>{v.lift >= 0 ? '+' : '−'}{Math.round(Math.abs(v.lift) * 100)}%</b> {unit} · {Math.round(v.on!)} vs {Math.round(v.off!)} a week{v.costPerExtra ? ` · ${fm(v.costPerExtra)} per extra` : ''}</> : <span className="muted">{v.why}</span>}</span>
+            <span><span className={`tag ${ACT[v.verdict]!.tone}`}>{v.verdict === 'keep' ? 'Keep' : ACT[v.verdict]!.text}</span></span>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }

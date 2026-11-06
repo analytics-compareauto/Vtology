@@ -232,3 +232,87 @@ export function guessMedium(headers: string[], fileName = ''): OfflineMedium | '
   if (/result|lead|sales|enquir|booking/.test(n)) return 'results';
   return null;
 }
+
+// ---------------------------------------------------------------- by name: channels, papers, stations, sites
+
+export interface VehicleWeek { week: string; medium: string; vehicle: string; region: string; spend: number; reach: number }
+export interface VehicleVerdict {
+  medium: string; vehicle: string; region: string; spend: number; reach: number; weeksOn: number; weeksOff: number;
+  /** cost per reach unit (per GRP, per 1,000 readers) against the same medium's average */
+  costPerReach: number | null; reachIndex: number | null;
+  /** results a week in its region when it ran and when it didn't */
+  on: number | null; off: number | null; lift: number | null; costPerExtra: number | null;
+  verdict: 'add' | 'keep' | 'cut' | 'trim' | 'test';
+  why: string;
+}
+export interface NamedMove { action: 'add' | 'cut' | 'trim'; medium: string; vehicle: string; region: string; perMonth: number; why: string; extraPerMonth: number; costPerExtra?: number | null }
+
+/**
+ * Each vehicle judged by name. A regional vehicle (Star Plus in Maharashtra, a Pune edition, a
+ * Hyderabad hoarding) is judged on how results in its own region moved in the weeks it ran; a
+ * national one, or one that ran every week, on what its reach cost against the rest of its medium.
+ */
+export function vehicleVerdicts(rows: VehicleWeek[], outcomes: OutcomeWeek[], measure: 'leads' | 'sales'): VehicleVerdict[] {
+  const anyState = [...rows, ...outcomes].some(x => STATES.has(x.region) && !STATE_OF[x.region]);
+  const place = (r: string) => (anyState ? stateOf(r) : r);
+  const resultWeeks = [...new Set(outcomes.map(o => o.week))].sort();
+  const byPlaceWeek = new Map<string, number>();
+  for (const o of outcomes) if (o.region !== 'All India') { const k = `${place(o.region)}|${o.week}`; byPlaceWeek.set(k, (byPlaceWeek.get(k) ?? 0) + o[measure]); }
+  const groups = new Map<string, VehicleWeek[]>();
+  for (const r of rows) { const k = `${r.medium}|${r.vehicle || '(unnamed)'}|${r.region}`; groups.set(k, [...(groups.get(k) ?? []), r]); }
+  // each medium's average cost per reach unit
+  const mediumCpr = new Map<string, number>();
+  for (const m of new Set(rows.map(r => r.medium))) { const xs = rows.filter(r => r.medium === m && r.reach > 0); const s = xs.reduce((a, r) => a + r.spend, 0), re = xs.reduce((a, r) => a + r.reach, 0); if (re) mediumCpr.set(m, s / re); }
+  const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+  return [...groups.entries()].map(([k, xs]) => {
+    const [medium, vehicle, region] = k.split('|') as [string, string, string];
+    const spend = xs.reduce((a, x) => a + x.spend, 0), reach = xs.reduce((a, x) => a + x.reach, 0);
+    const onWeeks = new Set(xs.filter(x => x.spend > 0).map(x => x.week));
+    const costPerReach = reach ? spend / reach : null;
+    const reachIndex = costPerReach && mediumCpr.get(medium) ? costPerReach / mediumCpr.get(medium)! : null;
+    let on: number | null = null, off: number | null = null, lift: number | null = null, costPerExtra: number | null = null;
+    const p = place(region);
+    const regional = region !== 'All India' && resultWeeks.some(w => byPlaceWeek.has(`${p}|${w}`));
+    const on_ = resultWeeks.filter(w => onWeeks.has(w)), off_ = resultWeeks.filter(w => !onWeeks.has(w));
+    if (regional && on_.length >= 3 && off_.length >= 3) {
+      on = avg(on_.map(w => byPlaceWeek.get(`${p}|${w}`) ?? 0)); off = avg(off_.map(w => byPlaceWeek.get(`${p}|${w}`) ?? 0));
+      lift = off ? (on! - off) / off : null;
+      const extra = (on! - off!) * on_.length;
+      const spendIn = xs.filter(x => on_.includes(x.week)).reduce((a, x) => a + x.spend, 0);
+      costPerExtra = extra > 0 && lift !== null && lift >= 0.08 ? spendIn / extra : null;
+    }
+    const name = `${vehicle}${region !== 'All India' ? ` (${region})` : ''}`;
+    let verdict: VehicleVerdict['verdict'] = 'test', why = '';
+    if (lift !== null && lift >= 0.08 && costPerExtra) { verdict = 'keep'; why = `${p} ${measure} rose ${Math.round(lift * 100)}% in its weeks`; }
+    else if (lift !== null) { verdict = 'cut'; why = `${p} ${measure} didn't rise in its weeks (${Math.round(on!)} a week with it, ${Math.round(off!)} without)`; }
+    else if (reachIndex !== null && reachIndex >= 1.4) { verdict = 'trim'; why = `its reach costs ${reachIndex.toFixed(1)}× the ${medium} average`; }
+    else if (reachIndex !== null && reachIndex <= 0.75) { verdict = 'keep'; why = `its reach costs ${Math.round((1 - reachIndex) * 100)}% less than the ${medium} average`; }
+    else why = onWeeks.size >= resultWeeks.length - 2 && resultWeeks.length ? 'ran every week, so there are no weeks without it to compare: pause it for 3 weeks in one region as a test' : region === 'All India' ? 'national, judged on reach cost only, which is close to average' : `too few weeks with and without it in ${p}`;
+    void name;
+    return { medium, vehicle, region, spend, reach, weeksOn: onWeeks.size, weeksOff: off_.length, costPerReach, reachIndex, on, off, lift, costPerExtra, verdict, why };
+  }).sort((a, b) => b.spend - a.spend);
+}
+
+/**
+ * The same budget, by name: what's cut (no rise in its region) and trimmed (dear reach) goes to the
+ * vehicles that brought the cheapest extra results, each raised by half at most. Added money is
+ * assumed to bring results 30% less well than it does today. Amounts are a month.
+ */
+export function namedPlan(v: VehicleVerdict[], weeks: number): { moves: NamedMove[]; freed: number; extra: number; promote: VehicleVerdict[] } {
+  const month = (x: number) => (x / Math.max(1, weeks)) * 4.33;
+  const best = v.filter(x => x.verdict === 'keep' && x.costPerExtra).sort((a, b) => a.costPerExtra! - b.costPerExtra!);
+  const promote = best.slice(0, 3);
+  const moves: NamedMove[] = [];
+  let freed = 0;
+  for (const x of v.filter(x => x.verdict === 'cut')) { const m = month(x.spend); freed += m; moves.push({ action: 'cut', medium: x.medium, vehicle: x.vehicle, region: x.region, perMonth: m, why: x.why, extraPerMonth: 0 }); }
+  for (const x of v.filter(x => x.verdict === 'trim')) { const m = month(x.spend) * 0.3; freed += m; moves.push({ action: 'trim', medium: x.medium, vehicle: x.vehicle, region: x.region, perMonth: m, why: x.why, extraPerMonth: 0 }); }
+  let left = freed, extra = 0;
+  for (const x of promote) {
+    if (left <= 0) break;
+    const room = month(x.spend) * 0.5, add = Math.min(left, room);
+    const gain = add / (x.costPerExtra! * 1.3);
+    moves.push({ action: 'add', medium: x.medium, vehicle: x.vehicle, region: x.region, perMonth: add, why: x.why, costPerExtra: x.costPerExtra, extraPerMonth: gain });
+    left -= add; extra += gain;
+  }
+  return { moves: moves.sort((a, b) => (a.action === 'add' ? -1 : 1) - (b.action === 'add' ? -1 : 1) || b.perMonth - a.perMonth), freed: freed - Math.max(0, left), extra, promote };
+}

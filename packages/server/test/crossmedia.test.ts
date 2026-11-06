@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { handle, type Db } from '@vtology/server';
-import { guessMedium, detectOfflineColumns, parseAmount, parseDay, toOfflineRows, tidyRegion, mediaLift } from '@vtology/core';
+import { vehicleVerdicts, namedPlan, guessMedium, detectOfflineColumns, parseAmount, parseDay, toOfflineRows, tidyRegion, mediaLift } from '@vtology/core';
 import { createTestDb } from './helpers/pglite';
 
 const LOCAL = 'local-secret-for-tests-at-least-32-chars';
@@ -90,3 +90,27 @@ describe('all media together', () => {
     expect(o.results[3]).toBe(215);
   });
 });
+
+describe('by name', () => {
+  it('judges each channel, station and site in its own region, and plans the money between them', () => {
+    const wk = (i: number) => new Date(Date.UTC(2026, 4, 4) + i * 7 * 86_400_000).toISOString().slice(0, 10);
+    const rows = Array.from({ length: 12 }, (_, i) => [
+      ...(i >= 3 && i <= 7 ? [{ week: wk(i), medium: 'tv', vehicle: 'Star Plus', region: 'Maharashtra', spend: 400000, reach: 20 }, { week: wk(i), medium: 'tv', vehicle: 'Aaj Tak', region: 'All India', spend: 300000, reach: 5 }] : []),
+      ...(i % 2 === 0 ? [{ week: wk(i), medium: 'radio', vehicle: 'Radio Mirchi', region: 'Bengaluru', spend: 45000, reach: 0 }] : []),
+    ]).flat();
+    const outcomes = Array.from({ length: 12 }, (_, i) => [
+      { week: wk(i), region: 'Mumbai', leads: i >= 3 && i <= 7 ? 160 : 100, sales: 0, value: 0 },
+      { week: wk(i), region: 'Pune', leads: 10, sales: 0, value: 0 },
+      { week: wk(i), region: 'Bengaluru', leads: 70, sales: 0, value: 0 },
+    ]).flat();
+    const v = vehicleVerdicts(rows, outcomes, 'leads');
+    const by = Object.fromEntries(v.map(x => [x.vehicle, x]));
+    expect(by['Star Plus']).toMatchObject({ verdict: 'keep', on: 170, off: 110 }); // Mumbai and Pune read as Maharashtra
+    expect(by['Radio Mirchi']!.verdict).toBe('cut');
+    expect(by['Aaj Tak']).toMatchObject({ verdict: 'trim' }); // 4.8x Star Plus per GRP
+    const p = namedPlan(v, 12);
+    expect(p.moves.map(m => [m.action, m.vehicle])).toEqual([['add', 'Star Plus'], ['trim', 'Aaj Tak'], ['cut', 'Radio Mirchi']]); // adds first, then the most money
+    expect(p.extra).toBeGreaterThan(0);
+  });
+});
+
