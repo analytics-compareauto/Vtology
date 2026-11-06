@@ -668,3 +668,4 @@ td.num, th.num { white-space: nowrap; }
 .map-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
 .map-grid label { display: grid; gap: 4px; }
 @media (max-width: 640px) { .lift-row { grid-template-columns: 1fr; } .region-row { grid-template-columns: 100px minmax(0, 1fr); } .region-row > .small { grid-column: 1 / -1; } }
+.kind-pick { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--flow); border-radius: 10px; background: var(--flow-soft); }

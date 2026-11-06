@@ -217,3 +217,16 @@ export function crossFindings(lifts: MediumLift[], regions: ReturnType<typeof re
     action: 'Move part of this to the regions in the table where results are ahead of spend.' });
   return out;
 }
+
+/** What a file most likely holds, from its columns and name: results when it carries leads or sales, else the medium its vehicle column names. */
+export function guessMedium(headers: string[], fileName = ''): OfflineMedium | null {
+  const h = headers.map(clean), n = fileName.toLowerCase();
+  const has = (re: RegExp) => h.some(x => re.test(x));
+  if (has(/^(leads|enquiries|enquiry|inquiries|test drives|bookings|sales|orders|retails?|units sold|deliveries|signups|registrations)$/) && !has(/^(grps?|trps?|spots|insertions|cost|spend|amount|net cost)$/)) return 'results';
+  if (has(/^(station|radio station|fm station)$/) || /radio|\bfm\b/.test(n)) return 'radio';
+  if (has(/^(publication|newspaper|edition|magazine|insertions|readership|circulation|sq cm|sqcm|col cm)$/) || /print|press|newspaper/.test(n)) return 'print';
+  if (has(/^(grps?|trps?|tvrs?|channel|channel name|tv channel|programme|telecast date|tx date)$/) || /\btv\b|television|barc/.test(n)) return 'tv';
+  if (has(/^(site|location|hoarding|billboard|footfall)$/) || /ooh|outdoor|hoarding/.test(n)) return 'ooh';
+  if (/result|lead|sales|enquir|booking/.test(n)) return 'results';
+  return null;
+}

@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { OFFLINE_LABEL, detectOfflineColumns, streamCsv, toOfflineRows, type OfflineColumns, type OfflineField, type OfflineMedium, type OfflineRow } from '@vtology/core';
+import { OFFLINE_LABEL, detectOfflineColumns, guessMedium, streamCsv, toOfflineRows, type OfflineColumns, type OfflineField, type OfflineMedium, type OfflineRow } from '@vtology/core';
 import { gunzipSync, unzipSync } from 'fflate';
 import { readXlsx } from '../xlsx';
 import { api, ApiError } from '../api';
@@ -179,7 +179,8 @@ const FIELDS: Record<OfflineMedium, { f: OfflineField; label: string; need?: boo
 };
 
 function ImportOffline({ T, onDone }: { T: string; onDone: (msg: string | null) => void }) {
-  const [medium, setMedium] = useState<OfflineMedium>('tv');
+  const [medium, setMedium] = useState<OfflineMedium | null>(null);
+  const [guessed, setGuessed] = useState(false);
   const [name, setName] = useState('');
   const [currency, setCurrency] = useState('INR');
   const [raw, setRaw] = useState<Record<string, string>[] | null>(null);
@@ -188,9 +189,9 @@ function ImportOffline({ T, onDone }: { T: string; onDone: (msg: string | null) 
   const [progress, setProgress] = useState<number | null>(null);
   const [over, setOver] = useState(false);
   const header = raw?.[0] ? Object.keys(raw[0]) : [];
-  useEffect(() => { if (header.length) setCols(detectOfflineColumns(header, medium)); }, [medium, raw]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (header.length && medium) setCols(detectOfflineColumns(header, medium)); }, [medium, raw]); // eslint-disable-line react-hooks/exhaustive-deps
   const parsed = useMemo(() => (raw ? toOfflineRows(raw, cols) : null), [raw, cols]);
-  const missing = FIELDS[medium].filter(x => x.need && !cols[x.f]).map(x => x.label);
+  const missing = medium ? FIELDS[medium].filter(x => x.need && !cols[x.f]).map(x => x.label) : [];
   const needsResult = medium === 'results' && !cols.leads && !cols.sales;
 
   async function choose(f0: File | undefined) {
@@ -208,12 +209,14 @@ function ImportOffline({ T, onDone }: { T: string; onDone: (msg: string | null) 
       const rows: Record<string, string>[] = [];
       if (/\.xlsx$/i.test(f.name)) rows.push(...await readXlsx(f)); else await streamCsv(f, r => { rows.push(r); });
       if (!rows.length) { setErr('The file has no rows under its header.'); return; }
+      const g = guessMedium(Object.keys(rows[0]!), f.name);
+      setMedium(g); setGuessed(!!g);
       setRaw(rows);
     } catch { setErr('Could not read the file. Save it as CSV or Excel (.xlsx) and try again.'); }
   }
 
   async function upload() {
-    if (!parsed) return;
+    if (!parsed || !medium) return;
     setErr(null); setProgress(0);
     let id: string | null = null;
     try {
@@ -240,17 +243,22 @@ function ImportOffline({ T, onDone }: { T: string; onDone: (msg: string | null) 
 
   return (
     <section className="panel">
-      <div className="panel-head"><div><h2>Add a report</h2><p>Agency schedules and post-buy reports as CSV or Excel, one row per spot, insertion, day or week. For results, a row per week (or day) and city with leads, bookings or sales.</p></div></div>
+      <div className="panel-head"><div><h2>Add a report</h2><p>One file at a time. Agency schedules and post-buy reports as CSV or Excel, one row per spot, insertion, day or week. For results, a row per week (or day) and city with leads, bookings or sales.</p></div></div>
       <div style={{ display: 'grid', gap: 12, maxWidth: 760 }}>
-        <div className="seg" role="group" aria-label="What the file holds">
-          {(Object.keys(OFFLINE_LABEL) as OfflineMedium[]).map(m => <button key={m} aria-pressed={medium === m} onClick={() => setMedium(m)}>{m === 'results' ? 'Results (leads, sales)' : OFFLINE_LABEL[m]}</button>)}
-        </div>
         <label className={`dropzone ${over ? 'over' : ''}`} onDragOver={e => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={e => { e.preventDefault(); setOver(false); choose(e.dataTransfer.files[0]); }}>
           <input type="file" accept=".csv,.txt,.xlsx,.zip,.gz" onChange={e => choose(e.target.files?.[0])} style={{ display: 'none' }} />
           <b>Drop the file here, or click to choose</b><span className="small muted">CSV, Excel, or either zipped</span>
         </label>
         {raw && (
           <>
+            <div className="kind-pick">
+              <b>What does this file hold?</b>
+              <div className="seg" role="group" aria-label="What the file holds">
+                {(Object.keys(OFFLINE_LABEL) as OfflineMedium[]).map(m => <button key={m} aria-pressed={medium === m} onClick={() => { setMedium(m); setGuessed(false); }}>{m === 'results' ? 'Results (leads, sales)' : OFFLINE_LABEL[m]}</button>)}
+              </div>
+              <span className="small muted">{!medium ? 'Choose one: Vtology could not tell from the columns.' : guessed ? `Looks like ${medium === 'results' ? 'results (leads or sales)' : OFFLINE_LABEL[medium]} from its columns. Change it if that’s wrong.` : ''}</span>
+            </div>
+            {medium && <>
             <div className="toolbar">
               <input className="input" style={{ maxWidth: 320 }} value={name} onChange={e => setName(e.target.value)} placeholder="Name, e.g. TV Diwali burst" maxLength={100} />
               {medium !== 'results' && <input className="input" style={{ width: 80 }} value={currency} onChange={e => setCurrency(e.target.value.toUpperCase().slice(0, 3))} aria-label="Currency" />}
@@ -263,7 +271,8 @@ function ImportOffline({ T, onDone }: { T: string; onDone: (msg: string | null) 
             ))}</div>
             <span className="small muted">{raw.length.toLocaleString('en-IN')} rows read; {parsed?.rows.length.toLocaleString('en-IN')} usable{parsed?.skipped ? `, ${parsed.skipped.toLocaleString('en-IN')} without a readable date or number (totals rows are usually these)` : ''}.</span>
             {(missing.length > 0 || needsResult) && <div className="note-box">{missing.length ? `Choose the column for ${missing.join(' and ')}.` : 'Choose a column for leads or for sales.'}</div>}
-            <div><button className="btn primary" disabled={!name.trim() || missing.length > 0 || needsResult || !parsed?.rows.length || progress !== null} onClick={upload}>{progress !== null ? `Adding… ${Math.round(progress * 100)}%` : 'Add this report'}</button></div>
+            <div><button className="btn primary" disabled={!medium || !name.trim() || missing.length > 0 || needsResult || !parsed?.rows.length || progress !== null} onClick={upload}>{progress !== null ? `Adding… ${Math.round(progress * 100)}%` : `Add as ${medium === 'results' ? 'results' : OFFLINE_LABEL[medium]}`}</button></div>
+            </>}
           </>
         )}
         {err && <div className="error-box" role="alert">{err}</div>}

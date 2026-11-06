@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { handle, type Db } from '@vtology/server';
-import { detectOfflineColumns, parseAmount, parseDay, toOfflineRows, tidyRegion, mediaLift } from '@vtology/core';
+import { guessMedium, detectOfflineColumns, parseAmount, parseDay, toOfflineRows, tidyRegion, mediaLift } from '@vtology/core';
 import { createTestDb } from './helpers/pglite';
 
 const LOCAL = 'local-secret-for-tests-at-least-32-chars';
@@ -30,6 +30,14 @@ describe('reading agency files', () => {
       .toEqual({ day: 'Telecast Date', vehicle: 'Channel Name', region: 'Market', units: 'No. of Spots', reach: 'GRP', seconds: 'Duration (sec)', spend: 'Net Cost (₹)' });
     expect(detectOfflineColumns(['Insertion Date', 'Publication', 'Edition', 'Size (sq cm)', 'Readership', 'Amount'], 'print')).toMatchObject({ day: 'Insertion Date', vehicle: 'Publication', region: 'Edition', seconds: 'Size (sq cm)', reach: 'Readership', spend: 'Amount' });
     expect(detectOfflineColumns(['Week', 'City', 'Enquiries', 'Bookings', 'Value'], 'results')).toEqual({ day: 'Week', region: 'City', leads: 'Enquiries', sales: 'Bookings', value: 'Value' });
+  });
+  it('tells what a file holds from its columns', () => {
+    expect(guessMedium(['Telecast Date', 'Channel Name', 'Market', 'No. of Spots', 'GRP', 'Net Cost (₹)'])).toBe('tv');
+    expect(guessMedium(['Insertion Date', 'Publication', 'Edition', 'Amount'])).toBe('print');
+    expect(guessMedium(['Date', 'Station', 'City', 'Cost'])).toBe('radio');
+    expect(guessMedium(['Week', 'City', 'Enquiries', 'Bookings'])).toBe('results');
+    expect(guessMedium(['Date', 'Cost'], 'outdoor-oct.xlsx')).toBe('ooh');
+    expect(guessMedium(['Date', 'Cost'])).toBe(null);
   });
   it('reads Indian dates, amounts and place names', () => {
     expect(['06/11/2026', '6-Nov-26', '6 November 2026', 'Nov 6, 2026', '2026-11-06', '46332'].map(parseDay)).toEqual(Array(6).fill('2026-11-06'));
