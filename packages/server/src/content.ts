@@ -3,7 +3,7 @@
  * demand, video checks and retention curves. Built on the posts the social sync already stores, plus
  * YouTube search and analytics through the brand's own connected account.
  */
-import { DEFAULT_TOPICS, aboutTopic, outlierMetric, findOutliers, outlierPatterns, scoreTopic, videoChecks, type ContentAccount, type SocialPost, type TopicResult, type TopicVideo } from '@vtology/core';
+import { DEFAULT_TOPICS, TREND_SEEDS, TREND_SUFFIXES, rankTrends, aboutTopic, outlierMetric, findOutliers, outlierPatterns, scoreTopic, videoChecks, type ContentAccount, type SocialPost, type TopicResult, type TopicVideo, type TrendItem, type Industry } from '@vtology/core';
 import { HttpError, requireRole, type Ctx, type Deps } from './context';
 import { refreshSampleSocial } from './demo';
 import { youtubeToken } from './social';
@@ -113,6 +113,56 @@ export async function suggestTopics(deps: Deps, ctx: Ctx, seed: string) {
     const j = await r.json() as [string, string[]];
     return { suggestions: (j[1] ?? []).filter(s => s.toLowerCase() !== q.toLowerCase()).slice(0, 10) };
   } catch { return { suggestions: [], note: 'YouTube suggestions are unavailable right now.' }; }
+}
+
+/** YouTube's suggestions for one phrase; empty when the service doesn't answer. */
+async function ytSuggest(deps: Deps, q: string): Promise<string[]> {
+  try {
+    const r = await (deps.fetch ?? fetch)(`https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&hl=en&gl=IN&q=${encodeURIComponent(q)}`, { signal: AbortSignal.timeout(6000) });
+    const j = await r.json() as [string, string[]];
+    return Array.isArray(j?.[1]) ? j[1] : [];
+  } catch { return []; }
+}
+
+const TREND_HOURS = 20;
+type TrendRow = { computed_at: string; items: TrendItem[] | string; previous: TrendItem[] | string | null };
+const parse = <T,>(x: T | string | null): T | null => (typeof x === 'string' ? (() => { try { return JSON.parse(x) as T; } catch { return null; } })() : x);
+
+/** Work out the category's top searches again: every seed (and the brand's tracked phrases) through a few endings. Free: no YouTube quota. */
+export async function refreshTrends(deps: Deps, tenantId: string, industry: Industry) {
+  const sql = deps.db.admin;
+  const tracked = await sql.query<{ phrase: string }>(`select phrase from vt.content_topics where tenant_id = $1 limit 10`, [tenantId]);
+  const bases = [...new Set([...TREND_SEEDS[industry], ...tracked.map(t => t.phrase.toLowerCase())])];
+  const queries = bases.flatMap(b => TREND_SUFFIXES.map(s => `${b}${s}`));
+  const lists: { seed: string; suggestions: string[] }[] = [];
+  for (let i = 0; i < queries.length; i += 10) lists.push(...await Promise.all(queries.slice(i, i + 10).map(async q => ({ seed: q, suggestions: await ytSuggest(deps, q) }))));
+  if (lists.filter(l => l.suggestions.length).length < 5) throw new HttpError(502, 'YouTube suggestions did not answer; trying again tomorrow.');
+  const [old] = await sql.query<TrendRow>(`select computed_at, items, previous from vt.content_trends where tenant_id = $1`, [tenantId]);
+  const before = parse<TrendItem[]>(old?.items ?? null) ?? [];
+  const items = rankTrends(lists, before);
+  await sql.query(`insert into vt.content_trends (tenant_id, computed_at, items, previous) values ($1, now(), $2, $3)
+    on conflict (tenant_id) do update set computed_at = now(), items = excluded.items, previous = excluded.previous`, [tenantId, JSON.stringify(items), before.length ? JSON.stringify(before) : null]);
+  return items;
+}
+
+/** The top 100 searches in the category (worked out on first look, then daily by the scheduled job). */
+export async function contentTrends(deps: Deps, ctx: Ctx) {
+  requireRole(ctx, VIEWERS, 'Content insights');
+  const [row] = await ctx.db.admin.query<TrendRow>(`select computed_at, items, previous from vt.content_trends where tenant_id = $1`, [ctx.tenantId]);
+  let items = parse<TrendItem[]>(row?.items ?? null), at = row?.computed_at ?? null;
+  if (!items?.length) { items = await refreshTrends(deps, ctx.tenantId, ctx.industry); at = new Date().toISOString(); }
+  const tracked = await ctx.db.admin.query<{ phrase: string }>(`select lower(phrase) as phrase from vt.content_topics where tenant_id = $1`, [ctx.tenantId]);
+  return { computedAt: at, items, tracked: tracked.map(t => t.phrase), canEdit: EDITORS.includes(ctx.role) };
+}
+
+/** Daily: refresh every real workspace whose list is older than a day (a few at a time). */
+export async function refreshAllTrends(deps: Deps) {
+  const due = await deps.db.admin.query<{ id: string; industry: Industry }>(
+    `select t.id, t.industry from vt.tenants t left join vt.content_trends c on c.tenant_id = t.id
+      where not t.is_demo and (c.computed_at is null or c.computed_at < now() - interval '${TREND_HOURS} hours') order by c.computed_at nulls first limit 6`);
+  let ok = 0;
+  for (const t of due) { try { await refreshTrends(deps, t.id, t.industry); ok++; } catch { /* next run */ } }
+  return { due: due.length, ok };
 }
 
 /** Search YouTube for each topic due for a scan (or the ones asked for) and score what comes back. */

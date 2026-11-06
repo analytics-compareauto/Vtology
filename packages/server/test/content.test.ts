@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { handle, encrypt, type Db } from '@vtology/server';
-import { aboutTopic, findOutliers, scoreTopic, videoChecks, type SocialPost } from '@vtology/core';
+import { aboutTopic, rankTrends, findOutliers, scoreTopic, videoChecks, type SocialPost } from '@vtology/core';
 import { createTestDb } from './helpers/pglite';
 
 const LOCAL = 'local-secret-for-tests-at-least-32-chars';
@@ -10,6 +10,7 @@ let db: Db;
 let calls: string[] = [];
 const yt = (async (input: string | URL) => {
   const u = new URL(String(input)); calls.push(u.pathname + u.search);
+  if (u.hostname === 'suggestqueries.google.com') { const q = u.searchParams.get('q')!; return Response.json([q, [`${q} 2026`, `${q} price in india`, 'creta vs seltos', 'ev', `${q} review`]]); }
   if (u.pathname.endsWith('/search')) return Response.json({ items: [1, 2, 3, 4, 5, 6].map(i => ({ id: { videoId: `v${i}` } })) });
   if (u.pathname.endsWith('/videos')) return Response.json({ items: [1, 2, 3, 4, 5, 6].map(i => ({ id: `v${i}`, snippet: { title: `Video ${i}`, channelId: i === 2 ? 'UC-carwale' : i === 4 ? 'UC-own' : `UC-${i}`, channelTitle: i === 2 ? 'CarWale' : `Channel ${i}`, publishedAt: new Date(NOW.getTime() - i * 200 * 86_400_000).toISOString() }, statistics: { viewCount: String(100_000 * (7 - i)) } })) });
   if (u.pathname.endsWith('/channels')) return Response.json({ items: u.searchParams.get('id')!.split(',').map(id => ({ id, statistics: { subscriberCount: id === 'UC-own' ? '50000' : '900000' } })) });
@@ -110,5 +111,22 @@ describe('brand health', () => {
     expect(h.tiles.map((t: any) => t.area)).toEqual(expect.arrayContaining(['Pipeline', 'Social', 'Content', 'Media', 'Connections']));
     expect(h.tiles.find((t: any) => t.area === 'Pipeline').status).not.toBe('none');
     expect(typeof h.score).toBe('number');
+  });
+  it('ranks category searches by how high and how often YouTube suggests them', () => {
+    const t = rankTrends([{ seed: 'suv', suggestions: ['creta vs seltos', 'suv'] }, { seed: 'car vs', suggestions: ['nexon ev range', 'creta vs seltos'] }], [{ phrase: 'nexon ev range', rank: 9 }]);
+    expect(t.map(x => x.phrase)).toEqual(['creta vs seltos', 'nexon ev range']); // one-word phrases left out
+    expect(t[0]).toMatchObject({ score: 100, theme: 'Comparison', previousRank: null, seeds: 2 });
+    expect(t[1]).toMatchObject({ theme: 'Electric', previousRank: 9 });
+  });
+  it('works out the top searches for a workspace on first look and keeps them', async () => {
+    const ws = (await call(token, 'GET', '/workspaces')).body.workspaces[0].id;
+    calls = [];
+    const a = await call(token, 'GET', `/tenants/${ws}/content/trends`);
+    expect(a.status).toBe(200);
+    expect(a.body.items.length).toBeGreaterThan(50);
+    expect(a.body.items[0].phrase).toBe('creta vs seltos');
+    const n = calls.length;
+    await call(token, 'GET', `/tenants/${ws}/content/trends`);
+    expect(calls.length).toBe(n); // saved, not worked out again
   });
 });

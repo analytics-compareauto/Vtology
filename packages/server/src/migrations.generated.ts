@@ -59,5 +59,9 @@ export const MIGRATIONS: { id: string; sql: string }[] = [
   {
     "id": "20261105000015_media_speed",
     "sql": "-- Speed: a small daily total per report and channel (for the Overview), and saved Media results\n-- (recalculated only when a report is added or removed).\ncreate table if not exists vt.media_daily (\n  tenant_id uuid not null references vt.tenants(id) on delete cascade,\n  report_id uuid not null references vt.media_reports(id) on delete cascade,\n  day date not null,\n  channel text not null,\n  impressions numeric not null default 0,\n  cost numeric not null default 0,\n  starts numeric not null default 0,\n  completes numeric not null default 0,\n  primary key (report_id, day, channel)\n);\ncreate index if not exists media_daily_tenant on vt.media_daily (tenant_id, day);\ninsert into vt.media_daily (tenant_id, report_id, day, channel, impressions, cost, starts, completes)\n  select tenant_id, report_id, day, channel, sum(impressions), sum(cost), sum(starts), sum(completes) from vt.media_rows group by tenant_id, report_id, day, channel\n  on conflict do nothing;\nalter table vt.media_daily enable row level security;\n\ncreate table if not exists vt.media_cache (\n  tenant_id uuid not null references vt.tenants(id) on delete cascade,\n  key text not null,\n  version text not null,\n  result jsonb not null,\n  created_at timestamptz not null default now(),\n  primary key (tenant_id, key)\n);\nalter table vt.media_cache enable row level security;\n"
+  },
+  {
+    "id": "20261106000016_content_trends",
+    "sql": "-- The top searches in a brand's category on YouTube, refreshed daily (from YouTube's own suggestions).\ncreate table if not exists vt.content_trends (\n  tenant_id uuid primary key references vt.tenants(id) on delete cascade,\n  computed_at timestamptz not null default now(),\n  items jsonb not null,\n  previous jsonb\n);\nalter table vt.content_trends enable row level security;\n"
   }
 ];

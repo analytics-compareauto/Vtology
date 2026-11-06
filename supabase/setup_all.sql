@@ -895,6 +895,16 @@ create table if not exists vt.media_cache (
 );
 alter table vt.media_cache enable row level security;
 
+-- ===== 20261106000016_content_trends.sql =====
+-- The top searches in a brand's category on YouTube, refreshed daily (from YouTube's own suggestions).
+create table if not exists vt.content_trends (
+  tenant_id uuid primary key references vt.tenants(id) on delete cascade,
+  computed_at timestamptz not null default now(),
+  items jsonb not null,
+  previous jsonb
+);
+alter table vt.content_trends enable row level security;
+
 create schema if not exists vt_meta;
 create table if not exists vt_meta.schema_migrations (id text primary key, applied_at timestamptz not null default now());
-insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth'), ('20261103000009_data_sources'), ('20261105000010_audiences'), ('20261105000011_media'), ('20261105000012_content'), ('20261105000013_repair_json'), ('20261105000014_media_reach'), ('20261105000015_media_speed') on conflict do nothing;
+insert into vt_meta.schema_migrations (id) values ('20261031000001_core'), ('20261031000002_security'), ('20261031000003_reference_data'), ('20261031000004_person_links'), ('20261031000005_workspaces'), ('20261102000006_social'), ('20261103000007_social_thumbnails'), ('20261103000008_growth'), ('20261103000009_data_sources'), ('20261105000010_audiences'), ('20261105000011_media'), ('20261105000012_content'), ('20261105000013_repair_json'), ('20261105000014_media_reach'), ('20261105000015_media_speed'), ('20261106000016_content_trends') on conflict do nothing;

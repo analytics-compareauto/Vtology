@@ -89,6 +89,8 @@ export function Content({ workspaceId, notify, range, onRange }: { workspaceId: 
         </section>
       )}
 
+      <Trending T={T} canEdit={d.canEdit} tracked={d.topics.map(t => t.phrase.toLowerCase())} onAdd={add} />
+
       <Topics T={T} d={d} busy={busy === 'scan'} onScan={scan} onAdd={add} onRemove={async id => { await api('DELETE', `${T}/content/topics/${id}`); load(); }} />
 
       <section className="panel">
@@ -125,6 +127,8 @@ function Topics({ T, d, busy, onScan, onAdd, onRemove }: { T: string; d: Data; b
   const [q, setQ] = useState('');
   const [sug, setSug] = useState<string[]>([]);
   const [sel, setSel] = useState<string | null>(null);
+  const [half, setHalf] = useState(0);
+  useEffect(() => { setHalf(0); }, [sel]);
   useEffect(() => {
     if (q.trim().length < 3) { setSug([]); return; }
     const t = setTimeout(() => api<{ suggestions: string[] }>('GET', `${T}/content/topics/suggest?q=${encodeURIComponent(q)}`).then(r => setSug(r.suggestions)).catch(() => setSug([])), 350);
@@ -212,11 +216,12 @@ function Topics({ T, d, busy, onScan, onAdd, onRemove }: { T: string; d: Data; b
                 <table>
                   <thead><tr><th className="num">#</th><th>Video</th><th>Channel</th><th className="num">Views</th><th className="num">Views a day</th><th className="num">Age</th></tr></thead>
                   <tbody>{vids.map((v, i) => {
+                    if (Math.floor(i / 10) !== half) return null;
                     const w = who(v.channelId);
                     return (
                       <tr key={v.id} style={{ background: w === 'you' ? 'var(--ok-soft)' : w ? 'var(--warn-soft)' : undefined }}>
                         <td className="num">{i + 1}</td>
-                        <td><a href={`https://youtube.com/watch?v=${v.id}`} target="_blank" rel="noreferrer">{v.title}</a></td>
+                        <td><a className="clamp2" href={`https://youtube.com/watch?v=${v.id}`} target="_blank" rel="noreferrer" title={v.title}>{v.title}</a></td>
                         <td className="small">{v.channel}{w && <span className={`tag ${w === 'you' ? 'ok' : 'warn'}`} style={{ marginLeft: 6 }}>{w === 'you' ? 'You' : 'Competitor'}</span>}</td>
                         <td className="num">{compact(v.views)}</td>
                         <td className="num">{compact(perDay[i]!)}</td>
@@ -226,33 +231,89 @@ function Topics({ T, d, busy, onScan, onAdd, onRemove }: { T: string; d: Data; b
                   })}</tbody>
                 </table>
               </div>
+              {vids.length > 10 && <Pager pages={Math.ceil(vids.length / 10)} page={half} onPage={setHalf} label={i => `${i * 10 + 1}–${Math.min(vids.length, i * 10 + 10)}`} />}
             </div>
             <div>
               <h3 style={{ margin: '0 0 4px' }}>The same topic on Instagram</h3>
               <p className="small muted" style={{ margin: '0 0 10px' }}>Instagram has no search data for outside tools, so this compares the posts about “{current.phrase}” that you and your competitors made in the last 180 days.</p>
               {ig.length ? (
-                <div className="table-wrap" style={{ boxShadow: 'none' }}>
-                  <table>
-                    <thead><tr><th>Account</th><th className="num">Posts</th><th className="num">Typical likes + comments</th><th className="num">vs their usual</th></tr></thead>
-                    <tbody>{ig.map(x => {
-                      const a = accName(x.accountId);
-                      return (
-                        <tr key={x.accountId}>
-                          <td><b>{a?.name ?? 'Account'}</b>{a && !a.isCompetitor && <span className="tag ok" style={{ marginLeft: 6 }}>You</span>}{x.best && <div className="small">{x.best.permalink ? <a href={x.best.permalink} target="_blank" rel="noreferrer">Best: {x.best.title || 'post'}</a> : `Best: ${x.best.title}`}</div>}</td>
-                          <td className="num">{x.posts || <span className="muted">none</span>}</td>
-                          <td className="num">{x.median !== null ? compact(x.median) : '–'}</td>
-                          <td className="num">{x.median !== null && x.usual ? <b style={{ color: x.median >= x.usual ? 'var(--ok)' : 'var(--leak)' }}>{(x.median / x.usual).toFixed(1)}×</b> : '–'}</td>
-                        </tr>
-                      );
-                    })}</tbody>
-                  </table>
-                </div>
+                <div className="ig-list">{ig.map(x => {
+                  const a = accName(x.accountId);
+                  const ratio = x.median !== null && x.usual ? x.median / x.usual : null;
+                  return (
+                    <div className="ig-item" key={x.accountId}>
+                      <div className="ig-head">
+                        <b>{a?.name ?? 'Account'}</b>{a && !a.isCompetitor && <span className="tag ok">You</span>}
+                        <span className="ig-ratio" style={{ color: ratio === null ? 'var(--muted)' : ratio >= 1 ? 'var(--ok)' : 'var(--leak)' }}>{ratio === null ? '–' : `${ratio.toFixed(1)}× usual`}</span>
+                      </div>
+                      <span className="small muted">{x.posts ? `${x.posts} ${x.posts === 1 ? 'post' : 'posts'}, typically ${x.median !== null ? compact(x.median) : '–'} likes + comments` : 'No posts on this topic'}</span>
+                      {x.best && (x.best.permalink ? <a className="small clamp1" href={x.best.permalink} target="_blank" rel="noreferrer" title={x.best.title}>Best: {x.best.title || 'post'}</a> : <span className="small clamp1">Best: {x.best.title}</span>)}
+                    </div>
+                  );
+                })}</div>
               ) : <div className="empty">Connect Instagram and add competitors on the Growth tab to compare this topic there.</div>}
             </div>
           </div>
         );
       })()}
       {d.isDemo && d.topics.some(t => t.result) && <p className="small muted" style={{ marginTop: 8 }}>Sample workspace: search results are made up.</p>}
+    </section>
+  );
+}
+
+function Pager({ pages, page, onPage, label }: { pages: number; page: number; onPage: (p: number) => void; label?: (i: number) => string }) {
+  return (
+    <nav className="pager" aria-label="Pages">
+      <button className="btn small" disabled={page === 0} onClick={() => onPage(page - 1)} aria-label="Previous page">‹</button>
+      {Array.from({ length: pages }, (_, i) => <button key={i} className="btn small" aria-current={i === page ? 'page' : undefined} onClick={() => onPage(i)}>{label ? label(i) : i + 1}</button>)}
+      <button className="btn small" disabled={page === pages - 1} onClick={() => onPage(page + 1)} aria-label="Next page">›</button>
+    </nav>
+  );
+}
+
+interface Trend { phrase: string; score: number; theme: string; rank: number; previousRank: number | null; seeds: number }
+
+/** The category's top 100 searches on YouTube, refreshed daily, 20 to a page, with one click to track any of them. */
+function Trending({ T, canEdit, tracked, onAdd }: { T: string; canEdit: boolean; tracked: string[]; onAdd: (p: string[]) => void }) {
+  const [r, setR] = useState<{ computedAt: string | null; items: Trend[] } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const [theme, setTheme] = useState<string | null>(null);
+  useEffect(() => { api<{ computedAt: string | null; items: Trend[] }>('GET', `${T}/content/trends`).then(setR).catch(e => setErr(e instanceof ApiError ? e.message : 'Could not load the top searches.')); }, [T]);
+  useEffect(() => { setPage(0); }, [theme]);
+  const themes = r ? [...r.items.reduce((m, x) => m.set(x.theme, (m.get(x.theme) ?? 0) + 1), new Map<string, number>())].sort((a, b) => b[1] - a[1]) : [];
+  const list = r ? r.items.filter(x => !theme || x.theme === theme) : [];
+  const pages = Math.max(1, Math.ceil(list.length / 20));
+  const shown = list.slice(page * 20, page * 20 + 20);
+  const hadBefore = !!r?.items.some(x => x.previousRank !== null);
+  return (
+    <section className="panel">
+      <div className="panel-head"><div><h2>Top 100 searches in your category on YouTube</h2><p>What people type most, ranked by how high YouTube suggests it, worked out again every day.{r?.computedAt ? ` Updated ${ago(r.computedAt)}.` : ''} Track a search to see who ranks for it.</p></div></div>
+      {err ? <div className="error-box">{err}</div> : !r ? <div className="progress" /> : (
+        <>
+          <div className="trend-themes" role="group" aria-label="Filter by kind of search">
+            <button aria-pressed={!theme} onClick={() => setTheme(null)}>All <b>{r.items.length}</b></button>
+            {themes.map(([k, n]) => <button key={k} aria-pressed={theme === k} onClick={() => setTheme(theme === k ? null : k)}>{k} <b>{n}</b></button>)}
+          </div>
+          <ol className="trend-list">
+            {shown.map(x => {
+              const isTracked = tracked.includes(x.phrase);
+              const move = x.previousRank === null ? (hadBefore ? 'new' : null) : x.previousRank - x.rank;
+              return (
+                <li key={x.phrase}>
+                  <span className="trend-rank">{x.rank}</span>
+                  <span className="trend-phrase" title={x.phrase}>{x.phrase}</span>
+                  <span className="tag plain trend-theme">{x.theme}</span>
+                  <span className="trend-bar" title={`${x.score} of 100`}><i style={{ width: `${x.score}%` }} /></span>
+                  <span className={`trend-move ${move === 'new' || (typeof move === 'number' && move > 0) ? 'up' : typeof move === 'number' && move < 0 ? 'down' : ''}`}>{move === 'new' ? 'New' : typeof move === 'number' && move !== 0 ? `${move > 0 ? '▲' : '▼'}${Math.abs(move)}` : ''}</span>
+                  {canEdit && (isTracked ? <span className="small muted trend-act">Tracked</span> : <button className="btn small trend-act" onClick={() => onAdd([x.phrase])}>Track</button>)}
+                </li>
+              );
+            })}
+          </ol>
+          {pages > 1 && <Pager pages={pages} page={page} onPage={setPage} />}
+        </>
+      )}
     </section>
   );
 }

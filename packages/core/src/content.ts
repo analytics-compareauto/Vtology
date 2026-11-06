@@ -163,3 +163,50 @@ export function videoChecks(v: { title: string; description: string; durationS: 
   if (v.avgViewPct !== null && ctx.usualViewPct && (v.views ?? 0) >= 100) checks.push({ id: 'retention', label: 'Viewers stay as long as usual', pass: v.avgViewPct >= ctx.usualViewPct * 0.8, fix: `Viewers watch ${Math.round(v.avgViewPct)}% on average against your usual ${Math.round(ctx.usualViewPct)}%. Open the retention curve to see where they leave, and tighten the opening.` });
   return checks.filter(c => c.fix || c.pass);
 }
+
+// ---------------------------------------------------------------- trending searches
+
+/** Words a category's searches start from; each is expanded through YouTube's own suggestions. */
+export const TREND_SEEDS: Record<Industry, string[]> = {
+  Automotive: ['new car', 'best car', 'best suv', 'electric car', 'ev', 'car price', 'on road price', 'upcoming cars', 'car review', 'car comparison', 'mileage car', 'car vs', 'bike', 'scooter', 'electric scooter', 'car loan', 'cng car', 'hybrid car', 'automatic car', 'family car'],
+  BFSI: ['credit card', 'home loan', 'personal loan', 'cibil score', 'term insurance', 'health insurance', 'mutual fund', 'sip', 'fd interest rate', 'stock market', 'gold loan', 'upi', 'income tax', 'car insurance'],
+  FMCG: ['skincare', 'hair fall', 'shampoo', 'face wash', 'breakfast recipe', 'healthy snacks', 'protein', 'diwali gift', 'perfume', 'sunscreen', 'dinner recipe', 'weight loss drink'],
+};
+export const TREND_SUFFIXES = ['', ' 2026', ' vs', ' price', ' under', ' best', ' new'];
+
+const THEMES: [string, RegExp][] = [
+  ['Comparison', /\bvs\b|versus|compar/],
+  ['Price', /price|lakh|cost|emi|₹|cheap|budget|under \d/],
+  ['Launch', /launch|upcoming|new |20\d\d|coming/],
+  ['Electric', /\bev\b|electric|charging|range|battery/],
+  ['Mileage', /mileage|kmpl|fuel|cng|hybrid/],
+  ['Review', /review|test|drive|experience|problem/],
+  ['Finance', /loan|insurance|interest|credit|finance/],
+];
+export function trendTheme(phrase: string): string { return THEMES.find(([, re]) => re.test(phrase))?.[0] ?? 'Other'; }
+
+export interface TrendItem { phrase: string; score: number; theme: string; rank: number; previousRank: number | null; seeds: number }
+
+/**
+ * Rank phrases from many suggestion lists: YouTube orders its suggestions by how much people search them,
+ * so a phrase scores higher the nearer the top it shows and the more lists it shows in. Phrases with a
+ * single word, or another brand's channel name only, are left out. Compared with the last run to show
+ * what's new or climbing.
+ */
+export function rankTrends(lists: { seed: string; suggestions: string[] }[], previous: { phrase: string; rank: number }[] = [], limit = 100): TrendItem[] {
+  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+  const acc = new Map<string, { score: number; seeds: Set<string> }>();
+  for (const l of lists) l.suggestions.forEach((s, i) => {
+    const p = norm(s);
+    if (p.split(' ').length < 2 || p.length > 80) return;
+    const e = acc.get(p) ?? { score: 0, seeds: new Set<string>() };
+    e.score += 1 - i / Math.max(10, l.suggestions.length);
+    e.seeds.add(norm(l.seed));
+    acc.set(p, e);
+  });
+  const prev = new Map(previous.map(p => [p.phrase, p.rank]));
+  const all = [...acc.entries()].map(([phrase, e]) => ({ phrase, raw: e.score * (1 + 0.15 * (e.seeds.size - 1)), seeds: e.seeds.size }))
+    .sort((a, b) => b.raw - a.raw || a.phrase.localeCompare(b.phrase)).slice(0, limit);
+  const top = all[0]?.raw || 1;
+  return all.map((x, i) => ({ phrase: x.phrase, score: Math.max(1, Math.round((x.raw / top) * 100)), theme: trendTheme(x.phrase), rank: i + 1, previousRank: prev.get(x.phrase) ?? null, seeds: x.seeds }));
+}
