@@ -14,6 +14,7 @@ import { schemaReady } from './schema';
 import { startConnect, finishConnect, socialOverview, syncTenant, syncAll, syncConnection, disconnect, growthOverview, addCompetitor, removeCompetitor } from './social';
 import { ROLES, type RoleCode } from '@vtology/core';
 import { listSources, createSource, updateSource, deleteSource, syncSource, syncTenantSources, dueSources } from './sources';
+import { listOffline, createOffline, appendOffline, finishOffline, deleteOffline, crossMediaOverview } from './crossmedia';
 import { contentOverview, addTopics, removeTopic, suggestTopics, scanTopics, videoRetention, contentTrends, refreshAllTrends, checkTrendRanksNow } from './content';
 import { healthSummary } from './health';
 import { listReports, createReport, appendMediaRows, finishReport, deleteReport, mediaOverview } from './media';
@@ -129,6 +130,16 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
     const cv = route.match(/^GET content\/videos\/([0-9a-f-]{36})\/retention$/);
     if (cv) return json(200, await videoRetention(deps, ctx, cv[1]!));
     // ---- media: DSP delivery reports for awareness analysis (CTV, audio, video, display)
+    // ---- all media together: TV, print, radio, outdoor and results next to digital
+    if (route === 'GET crossmedia') return json(200, await crossMediaOverview(ctx, rangeParam(url, ctx.now, 180)));
+    if (route === 'GET crossmedia/reports') return json(200, await listOffline(ctx));
+    if (route === 'POST crossmedia/reports') return json(201, await createOffline(ctx, await req.json().catch(() => ({}))));
+    const om = route.match(/^(POST|DELETE) crossmedia\/reports\/([0-9a-f-]{36})(\/rows|\/finish)?$/);
+    if (om) {
+      if (om[1] === 'DELETE' && !om[3]) return json(200, await deleteOffline(ctx, om[2]!));
+      if (om[3] === '/rows') return json(200, await appendOffline(ctx, om[2]!, await req.json().catch(() => ({}))));
+      if (om[3] === '/finish') return json(200, await finishOffline(ctx, om[2]!));
+    }
     if (route === 'GET media') return json(200, await mediaOverview(ctx, rangeParam(url, ctx.now, 30), { channel: url.searchParams.get('channel'), report: url.searchParams.get('report') }));
     if (route === 'GET media/reports') return json(200, await listReports(ctx));
     if (route === 'POST media/reports') return json(201, await createReport(ctx, await req.json().catch(() => ({}))));

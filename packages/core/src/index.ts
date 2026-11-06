@@ -11,3 +11,4 @@ export * from './audience';
 export * from './media';
 export * from './media-sample';
 export * from './content';
+export * from './crossmedia';

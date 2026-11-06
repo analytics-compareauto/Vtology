@@ -67,5 +67,9 @@ export const MIGRATIONS: { id: string; sql: string }[] = [
   {
     "id": "20261106000017_trend_ranks",
     "sql": "-- Who ranks in YouTube's top 20 for each of the category's top searches (checked a few a day, each weekly).\nalter table vt.content_trends add column if not exists ranks jsonb not null default '{}'::jsonb;\n"
+  },
+  {
+    "id": "20261106000018_cross_media",
+    "sql": "-- TV, print, radio and outdoor reports, and the brand's results (leads, sales by week and city), kept\n-- as daily totals per region and vehicle (channel, publication, station). The file itself isn't kept.\ncreate table if not exists vt.offline_reports (\n  id uuid primary key default gen_random_uuid(),\n  tenant_id uuid not null references vt.tenants(id) on delete cascade,\n  name text not null,\n  medium text not null check (medium in ('tv', 'print', 'radio', 'ooh', 'results')),\n  currency text not null default 'INR',\n  status text not null default 'uploading' check (status in ('uploading', 'ready')),\n  rows int not null default 0,\n  date_from date,\n  date_to date,\n  created_by uuid,\n  created_at timestamptz not null default now(),\n  unique (tenant_id, name)\n);\ncreate table if not exists vt.offline_daily (\n  tenant_id uuid not null references vt.tenants(id) on delete cascade,\n  report_id uuid not null references vt.offline_reports(id) on delete cascade,\n  day date not null,\n  region text not null,\n  vehicle text not null,\n  spend numeric not null default 0,\n  reach numeric not null default 0,\n  units numeric not null default 0,\n  seconds numeric not null default 0,\n  leads numeric not null default 0,\n  sales numeric not null default 0,\n  value numeric not null default 0,\n  primary key (report_id, day, region, vehicle)\n);\ncreate index if not exists offline_daily_tenant on vt.offline_daily (tenant_id, day);\nalter table vt.offline_reports enable row level security;\nalter table vt.offline_daily enable row level security;\n"
   }
 ];

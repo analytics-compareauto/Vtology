@@ -12,6 +12,7 @@ export const IconData = I(<><ellipse cx="12" cy="6" rx="7.5" ry="2.8" /><path d=
 export const IconGrowth = I(<><path d="M3 17l6-6 4 4 8-8" /><path d="M15 7h6v6" /></>);
 export const IconAudience = I(<><circle cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="4.5" /><circle cx="12" cy="12" r="1" fill="currentColor" /></>);
 export const IconMedia = I(<><rect x="3" y="5" width="18" height="12" rx="2.5" /><path d="M8 21h8M12 17v4" /><path d="M10.5 8.5v5l4-2.5z" fill="currentColor" /></>);
+export const IconAllMedia = I(<><rect x="3" y="4" width="7" height="7" rx="1.5" /><rect x="14" y="4" width="7" height="7" rx="1.5" /><rect x="3" y="13" width="7" height="7" rx="1.5" /><path d="M14 17h7M17.5 13.5v7" /></>);
 export const IconContent = I(<><path d="M4 5h16v11H4z" /><path d="M8 20h8" /><path d="M9 12l2-3 2 2 2-3" /></>);
 export const IconUp = I(<path d="M5 15l7-7 7 7" />);
 export const IconDown = I(<path d="M5 9l7 7 7-7" />);

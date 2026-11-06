@@ -13,14 +13,15 @@ import { Social } from './views/Social';
 import { Growth } from './views/Growth';
 import { Audiences } from './views/Audiences';
 import { Media } from './views/Media';
+import { AllMedia } from './views/AllMedia';
 import { Content } from './views/Content';
 import { ActionDialog, type ActionDraft } from './ActionDialog';
 import { ErrorBoundary } from './ErrorBoundary';
 import { loadRange, type Range } from './DateRange';
-import { BrandMark, IconApprovals, IconAudience, IconContent, IconData, IconMedia, IconFindings, IconGrowth, IconJourneys, IconOverview, IconPartners, IconSocial } from './icons';
+import { BrandMark, IconApprovals, IconAudience, IconContent, IconData, IconMedia, IconAllMedia, IconFindings, IconGrowth, IconJourneys, IconOverview, IconPartners, IconSocial } from './icons';
 
 export interface WorkspaceData { me: Me; journeys: Journey[]; partners: PartnerScore[]; findings: Finding[]; actions: ActionRun[] }
-type Tab = 'overview' | 'journeys' | 'findings' | 'partners' | 'social' | 'growth' | 'content' | 'media' | 'audiences' | 'approvals' | 'data';
+type Tab = 'overview' | 'journeys' | 'findings' | 'partners' | 'social' | 'growth' | 'content' | 'media' | 'allmedia' | 'audiences' | 'approvals' | 'data';
 const TABS: { id: Tab; label: string; Icon: (p: React.SVGProps<SVGSVGElement>) => React.JSX.Element; lead: string }[] = [
   { id: 'overview', label: 'Overview', Icon: IconOverview, lead: 'Where every customer journey stands, and what is leaking.' },
   { id: 'journeys', label: 'Journeys', Icon: IconJourneys, lead: 'Every customer, the stage they are at, and how long they have waited.' },
@@ -30,6 +31,7 @@ const TABS: { id: Tab; label: string; Icon: (p: React.SVGProps<SVGSVGElement>) =
   { id: 'growth', label: 'Growth', Icon: IconGrowth, lead: 'Followers, reach and engagement against the previous period and your competitors, with a plan to grow.' },
   { id: 'content', label: 'Content', Icon: IconContent, lead: 'Your standout posts and competitors’, what people search on YouTube and who ranks, and how to fix your videos.' },
   { id: 'media', label: 'Media', Icon: IconMedia, lead: 'CTV, audio and video campaigns judged on attention: completion, viewability and cost per completed view, by deal, site, creative and region.' },
+  { id: 'allmedia', label: 'All media', Icon: IconAllMedia, lead: 'TV, print, radio, outdoor and digital on one timeline next to your leads and sales: which media moved results, and where.' },
   { id: 'audiences', label: 'Audiences', Icon: IconAudience, lead: 'Hashed customer lists, the buckets you reach, and proof against people held back.' },
   { id: 'approvals', label: 'Approvals', Icon: IconApprovals, lead: 'Fixes waiting for a decision, and the ones already applied.' },
   { id: 'data', label: 'Data', Icon: IconData, lead: 'Imports from your systems and the matching that joins them into one record.' },
@@ -154,6 +156,7 @@ export function Dashboard({ workspaceId, email, onSwitch, onSignOut }: { workspa
           {tab === 'social' && (['partner_user', 'relationship_manager'].includes(me.role) ? <div className="empty">Social insights are not part of your role’s view.</div> : <Social data={data} workspaceId={workspaceId} notify={setToast} range={range} onRange={setRange} />)}
           {tab === 'growth' && (['partner_user', 'relationship_manager'].includes(me.role) ? <div className="empty">Growth insights are not part of your role’s view.</div> : <Growth data={data} workspaceId={workspaceId} notify={setToast} range={range} onRange={setRange} />)}
           {tab === 'content' && (['partner_user', 'relationship_manager'].includes(me.role) ? <div className="empty">Content insights are not part of your role’s view.</div> : <Content workspaceId={workspaceId} notify={setToast} range={range} onRange={setRange} />)}
+          {tab === 'allmedia' && (['marketing_head', 'data_steward', 'finance'].includes(me.role) ? <AllMedia workspaceId={workspaceId} notify={setToast} /> : <div className="empty">Media reports carry spend, so they are open to marketing heads, data stewards and finance.</div>)}
           {tab === 'media' && (['marketing_head', 'data_steward', 'finance'].includes(me.role) ? <Media workspaceId={workspaceId} notify={setToast} range={range} onRange={setRange} canEdit={me.role === 'marketing_head' || me.role === 'data_steward'} /> : <div className="empty">Media reports carry spend, so they are open to marketing heads, data stewards and finance.</div>)}
           {tab === 'audiences' && <Audiences workspaceId={workspaceId} notify={setToast} isDemo={me.isDemo} canEdit={me.role === 'marketing_head' || me.role === 'data_steward'} />}
           {tab === 'approvals' && <Approvals data={data} workspaceId={workspaceId} reload={load} notify={setToast} />}

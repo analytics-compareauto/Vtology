@@ -101,7 +101,7 @@ export function moneyFormat(currency: string) {
   return (v: number) => {
     const digits = Math.abs(v) < 1 ? 3 : Math.abs(v) < 10 ? 2 : 0;
     if (!/^[A-Z]{3}$/.test(currency)) return v.toLocaleString('en', { maximumFractionDigits: digits });
-    try { return new Intl.NumberFormat('en', { style: 'currency', currency, currencyDisplay: 'narrowSymbol', maximumFractionDigits: digits, minimumFractionDigits: digits }).format(v); }
+    try { return new Intl.NumberFormat(currency === 'INR' ? 'en-IN' : 'en', { style: 'currency', currency, currencyDisplay: 'narrowSymbol', maximumFractionDigits: digits, minimumFractionDigits: digits }).format(v); }
     catch { return `${currency} ${v.toFixed(digits)}`; }
   };
 }
