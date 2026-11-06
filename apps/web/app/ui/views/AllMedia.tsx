@@ -37,7 +37,7 @@ export interface Chain {
   convert: { spend: number; media: { medium: string; label: string; spend: number }[]; results: number; perResult: number | null; platformConversions: number | null; platformCpa: number | null };
 }
 export interface Shared { mainline: boolean; results: boolean; programmatic: boolean; search: boolean; meta: boolean; terms: boolean }
-export type MediaData = Data & { picture: Picture & { chain: Chain; shared: Shared } };
+export type MediaData = Data & { picture: Picture & { chain: Chain; shared: Shared }; from: string; to: string };
 export type MediaView = 'summary' | 'awareness' | 'search' | 'files';
 
 /** The summary (and the awareness part) of the Media tab, from data the Media tab loads once. */
@@ -72,13 +72,7 @@ export function MediaSummary({ d, part, onView }: { d: MediaData; part: 'summary
     <>
       <ChainView c={p.chain} fm={fm} unit={p.resultsFrom === 'platforms' ? 'online conversions' : unit} resultsFrom={p.resultsFrom} onView={onView} shared={p.shared} />
       <Glance p={p} fm={fm} onView={onView} />
-      {d.weeks.length > 1 && (
-        <section className="panel">
-          <div className="panel-head"><div><h2>Week by week</h2><p>Spend by medium on top, {p.resultsFrom === 'platforms' ? 'online conversions' : unit} below, on the same weeks.</p></div></div>
-          <WeeklyStack weeks={d.weeks} series={d.series} fm={fm} />
-          {d.hasResults && <BarChart x={d.weeks} values={d.results} height={140} color="var(--ink-2)" xFormat={short} label={unit} />}
-        </section>
-      )}
+      {d.weeks.length > 1 && <WeekTable d={d} fm={fm} unit={p.resultsFrom === 'platforms' ? 'online conversions' : unit} />}
       {d.hasResults && d.lifts.length > 0 && (
         <section className="panel">
           <div className="panel-head"><div><h2>Each awareness medium: {unit} a week with it and without it</h2><p>The darker bar is weeks it ran; the lighter, weeks it didn’t.</p></div></div>
@@ -118,6 +112,50 @@ export function MediaSummary({ d, part, onView }: { d: MediaData; part: 'summary
 }
 
 const pctChange = (a: number, b: number) => (b > 0 ? (a - b) / b : null);
+
+/**
+ * Week by week as a readable table: each week's spend (and which media ran), results, and what a
+ * result cost, with the best and worst weeks named above it.
+ */
+function WeekTable({ d, fm, unit }: { d: MediaData; fm: (v: number) => string; unit: string }) {
+  const rows = d.weeks.map((w, i) => {
+    const parts = d.series.map(s => ({ medium: s.medium, label: s.label, v: s.values[i]! })).filter(x => x.v > 0).sort((a, b) => b.v - a.v);
+    const spend = parts.reduce((a, x) => a + x.v, 0);
+    // a week cut by the date range (starting before it, or not over yet) is shown but not judged
+    const partial = w < d.from || Date.parse(w) + 6 * 86_400_000 > Date.parse(d.to);
+    const res = d.hasResults ? d.results[i]! : null;
+    return { w, parts, spend, res, partial, per: res && !partial ? spend / res : null };
+  });
+  const maxSpend = Math.max(...rows.map(r => r.spend), 1), maxRes = Math.max(...rows.map(r => r.res ?? 0), 1);
+  const priced = rows.filter(r => r.per !== null && r.spend > 0);
+  const best = priced.length > 1 ? priced.reduce((a, b) => (b.per! < a.per! ? b : a)) : null;
+  const worst = priced.length > 1 ? priced.reduce((a, b) => (b.per! > a.per! ? b : a)) : null;
+  const most = rows.filter(r => r.res && !r.partial).reduce<typeof rows[number] | null>((a, b) => (!a || b.res! > a.res! ? b : a), null);
+  const one = unit.replace(/s$/, '').replace(/s /, ' ');
+  const wk = (w: string) => `week of ${short(w)}`;
+  const many = rows.length > 12;
+  return (
+    <section className="panel">
+      <div className="panel-head"><div><h2>Week by week</h2>
+        <p>{best && worst ? <>Cheapest {one}: <b>{wk(best.w)}</b>, {fm(best.per!)} each with {best.parts.slice(0, 2).map(x => x.label).join(' and ')} leading. Dearest: <b>{wk(worst.w)}</b>, {fm(worst.per!)} each.{most ? <> Most {unit}: {wk(most.w)} ({Math.round(most.res!).toLocaleString('en-IN')}).</> : null}</> : `What was spent each week, on what, and the ${unit} that came in.`}</p></div></div>
+      <div className={`week-table ${many ? 'many' : ''}`}>
+        <div className="week-row head"><span>Week of</span><span>Spend, and what ran</span><span className="num">{unit[0]!.toUpperCase() + unit.slice(1)}</span><span className="num">Cost per {one}</span></div>
+        {rows.map(r => (
+          <div className={`week-row ${r === best ? 'best' : r === worst ? 'worst' : ''}`} key={r.w}>
+            <span className="week-date"><b>{short(r.w)}</b>{r.partial && <span className="small muted">part week</span>}{r === best && <span className="tag ok">Cheapest</span>}{r === worst && <span className="tag leak">Dearest</span>}</span>
+            <span className="week-spend">
+              <span className="week-bar" style={{ width: `${Math.max(2, (r.spend / maxSpend) * 100)}%` }} title={r.parts.map(x => `${x.label}: ${fm(x.v)}`).join('\n')}>{r.parts.map(x => <i key={x.medium} style={{ flexGrow: x.v, background: MEDIUM_COLOR[x.medium] ?? 'var(--muted)' }} />)}</span>
+              <span className="small"><b>{r.spend ? fm(r.spend) : 'Nothing'}</b>{r.parts.length ? <span className="muted"> · {r.parts.slice(0, 3).map(x => x.label.replace(/ \(.*\)$/, '')).join(', ')}{r.parts.length > 3 ? ` +${r.parts.length - 3}` : ''}</span> : null}</span>
+            </span>
+            <span className="num week-res">{r.res !== null ? <><span className="week-rbar"><i style={{ width: `${(r.res / maxRes) * 100}%` }} /></span><b>{Math.round(r.res).toLocaleString('en-IN')}</b></> : <span className="muted">–</span>}</span>
+            <span className="num"><b style={{ color: r === best ? 'var(--ok)' : r === worst ? 'var(--leak)' : undefined }}>{r.per !== null && r.spend ? fm(r.per) : '–'}</b></span>
+          </div>
+        ))}
+      </div>
+      <div className="wstack-legend" style={{ marginTop: 10 }}>{d.series.map(s => <span key={s.medium}><i style={{ background: MEDIUM_COLOR[s.medium] ?? 'var(--muted)' }} />{s.label}</span>)}</div>
+    </section>
+  );
+}
 
 /** Aware → look for you → lead or sale: the money at each step, what it bought, and what moved between them. */
 function ChainView({ c, fm, unit, resultsFrom, onView, shared }: { c: Chain; fm: (v: number) => string; unit: string; resultsFrom: string; onView: (v: MediaView) => void; shared: Shared }) {

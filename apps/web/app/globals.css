@@ -757,3 +757,18 @@ td.num, th.num { white-space: nowrap; }
 .dealer-opt { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); cursor: pointer; }
 .dealer-opt.on { border-color: var(--flow); background: var(--flow-soft); }
 .dealer-opt input { margin-top: 3px; }
+/* week by week */
+.week-table { display: grid; }
+.week-table.many { max-height: 560px; overflow: auto; }
+.week-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 170px 130px; gap: 14px; align-items: center; padding: 9px 8px; border-bottom: 1px solid var(--line); border-radius: 8px; }
+.week-row.head { font-size: 12px; color: var(--muted); font-weight: 600; padding-top: 0; position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.week-row.best { background: var(--ok-soft); }
+.week-row.worst { background: var(--leak-soft); }
+.week-date { display: flex; gap: 8px; align-items: center; }
+.week-spend { display: grid; gap: 4px; min-width: 0; }
+.week-bar { display: flex; gap: 2px; height: 12px; border-radius: 3px; overflow: hidden; }
+.week-bar i { display: block; height: 100%; min-width: 2px; }
+.week-res { display: grid; grid-template-columns: minmax(0, 1fr) 54px; gap: 8px; align-items: center; }
+.week-rbar { height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+.week-rbar i { display: block; height: 100%; background: var(--ink-2); border-radius: 4px; }
+@media (max-width: 760px) { .week-row { grid-template-columns: 90px minmax(0, 1fr); } .week-row > :nth-child(3), .week-row > :nth-child(4) { grid-column: 2; } .week-row.head > :nth-child(n+3) { display: none; } }
