@@ -219,9 +219,11 @@ export function crossFindings(lifts: MediumLift[], regions: ReturnType<typeof re
 }
 
 /** What a file most likely holds, from its columns and name: results when it carries leads or sales, else the medium its vehicle column names. */
-export function guessMedium(headers: string[], fileName = ''): OfflineMedium | null {
+export function guessMedium(headers: string[], fileName = ''): OfflineMedium | 'digital' | null {
   const h = headers.map(clean), n = fileName.toLowerCase();
   const has = (re: RegExp) => h.some(x => re.test(x));
+  // an ad platform report (DV360, Google Ads, Meta) belongs on the Media tab
+  if (has(/^impressions$/) && has(/^(insertion order|line item|line item type|ad group|ad set|campaign|advertiser currency|creative)$/)) return 'digital';
   if (has(/^(leads|enquiries|enquiry|inquiries|test drives|bookings|sales|orders|retails?|units sold|deliveries|signups|registrations)$/) && !has(/^(grps?|trps?|spots|insertions|cost|spend|amount|net cost)$/)) return 'results';
   if (has(/^(station|radio station|fm station)$/) || /radio|\bfm\b/.test(n)) return 'radio';
   if (has(/^(publication|newspaper|edition|magazine|insertions|readership|circulation|sq cm|sqcm|col cm)$/) || /print|press|newspaper/.test(n)) return 'print';

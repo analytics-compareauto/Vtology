@@ -37,6 +37,7 @@ describe('reading agency files', () => {
     expect(guessMedium(['Date', 'Station', 'City', 'Cost'])).toBe('radio');
     expect(guessMedium(['Week', 'City', 'Enquiries', 'Bookings'])).toBe('results');
     expect(guessMedium(['Date', 'Cost'], 'outdoor-oct.xlsx')).toBe('ooh');
+    expect(guessMedium(['Date', 'Insertion Order', 'Line Item', 'Impressions', 'Total Media Cost (Advertiser Currency)'])).toBe('digital');
     expect(guessMedium(['Date', 'Cost'])).toBe(null);
   });
   it('reads Indian dates, amounts and place names', () => {

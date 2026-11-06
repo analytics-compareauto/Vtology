@@ -206,10 +206,16 @@ function ImportOffline({ T, onDone }: { T: string; onDone: (msg: string | null) 
         f = new File([data as BlobPart], n.split('/').pop()!);
       }
       if (!name) setName(f.name.replace(/\.(csv|txt|xlsx)$/i, '').slice(0, 100));
+      // a digital report is told from its header line, before a large file is read
+      if (!/\.xlsx$/i.test(f.name)) {
+        const first = (await f.slice(0, 65536).text()).replace(/^\uFEFF/, '').split(/\r?\n/)[0] ?? '';
+        if (guessMedium(first.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(x => x.replace(/^"|"$/g, '').trim()), f.name) === 'digital') { setErr('This is a digital report (DV360 or another ad platform). Import it on the Media tab: it appears here on its own once imported.'); return; }
+      }
       const rows: Record<string, string>[] = [];
       if (/\.xlsx$/i.test(f.name)) rows.push(...await readXlsx(f)); else await streamCsv(f, r => { rows.push(r); });
       if (!rows.length) { setErr('The file has no rows under its header.'); return; }
       const g = guessMedium(Object.keys(rows[0]!), f.name);
+      if (g === 'digital') { setErr('This is a digital report (DV360 or another ad platform). Import it on the Media tab: it appears here on its own once imported.'); return; }
       setMedium(g); setGuessed(!!g);
       setRaw(rows);
     } catch { setErr('Could not read the file. Save it as CSV or Excel (.xlsx) and try again.'); }
@@ -243,7 +249,7 @@ function ImportOffline({ T, onDone }: { T: string; onDone: (msg: string | null) 
 
   return (
     <section className="panel">
-      <div className="panel-head"><div><h2>Add a report</h2><p>One file at a time. Agency schedules and post-buy reports as CSV or Excel, one row per spot, insertion, day or week. For results, a row per week (or day) and city with leads, bookings or sales.</p></div></div>
+      <div className="panel-head"><div><h2>Add a report</h2><p>One file at a time: TV, print, radio, outdoor or results. Digital reports (DV360, Google Ads) go on the Media tab and show here on their own. Agency schedules and post-buy reports as CSV or Excel, one row per spot, insertion, day or week. For results, a row per week (or day) and city with leads, bookings or sales.</p></div></div>
       <div style={{ display: 'grid', gap: 12, maxWidth: 760 }}>
         <label className={`dropzone ${over ? 'over' : ''}`} onDragOver={e => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={e => { e.preventDefault(); setOver(false); choose(e.dataTransfer.files[0]); }}>
           <input type="file" accept=".csv,.txt,.xlsx,.zip,.gz" onChange={e => choose(e.target.files?.[0])} style={{ display: 'none' }} />
