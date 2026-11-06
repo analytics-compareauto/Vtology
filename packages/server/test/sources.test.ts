@@ -133,3 +133,24 @@ describe('connected data sources', () => {
     expect(nonsense.status).toBe(400);
   });
 });
+
+describe('a dealer group takes only its own leads', () => {
+  it('lists dealers under their parents, and pulls only the chosen group and its branches', async () => {
+    const other = { id: 'D9', name: 'Other Motors', city: 'Delhi', parentDealerId: '' };
+    dealers.push(other);
+    leads = [lead('31', { updatedAt: '2026-11-01T10:00:00Z' }), lead('32', { updatedAt: '2026-11-01T10:05:00Z', dealer: { id: 'D2', name: 'IJM Palam Vihar' } }),
+             lead('33', { updatedAt: '2026-11-01T10:06:00Z', dealer: { id: 'ijm-old' } }), lead('34', { updatedAt: '2026-11-01T10:07:00Z', dealer: { id: 'D9', name: 'Other Motors' } })];
+    const w = (await call(token, 'POST', '/workspaces', { name: 'IJM Toyota', industry: 'Automotive', sample: false })).body.workspace.id;
+    const check = await call(token, 'POST', `/tenants/${w}/sources/check`, { baseUrl: FEED, key: KEY });
+    expect(check.body.dealers.map((d: any) => [d.name, d.branches.map((b: any) => b.name)])).toEqual([['IJM Toyota', ['IJM Palam Vihar']], ['Other Motors', []]]);
+    const c = await call(token, 'POST', `/tenants/${w}/sources`, { name: 'CompareAuto dealer dashboard', baseUrl: FEED, key: KEY, dealerScope: ['D1'] });
+    expect(c.status).toBe(201);
+    expect(c.body).toMatchObject({ dealers: 2, leads: 3 }); // IJM Toyota, its branch, and the lead filed under its old id; not Other Motors
+    const people = await db.admin.query<{ n: number }>(`select count(*)::int as n from vt.source_records where tenant_id = $1`, [w]);
+    expect(people[0]!.n).toBe(3); // the other dealer's customer is never stored
+    const partners = await db.admin.query<{ name: string }>(`select distinct name from vt.partners where tenant_id = $1 order by name`, [w]);
+    expect(partners.map(p => p.name)).toEqual(['IJM Palam Vihar', 'IJM Toyota']);
+    dealers.pop();
+  });
+});
+

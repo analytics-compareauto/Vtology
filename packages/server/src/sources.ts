@@ -14,7 +14,7 @@ const EDITORS: Ctx['role'][] = ['marketing_head', 'data_steward'];
 const TEMPLATES = { lead_feed_v1: { leads: '/leads', dealers: '/dealers' } } as const;
 type Template = keyof typeof TEMPLATES;
 
-interface SourceRow { id: string; tenant_id: string; name: string; template: Template; base_url: string; key_enc: string | null; status_map: Record<string, string>; seen_statuses: Record<string, number>; synced_until: string | null; created_by: string | null }
+interface SourceRow { id: string; tenant_id: string; name: string; template: Template; base_url: string; key_enc: string | null; dealer_scope: string[]; status_map: Record<string, string>; seen_statuses: Record<string, number>; synced_until: string | null; created_by: string | null }
 
 /** Only public https addresses: the server must never be pointed at itself or a private network. */
 export function checkSourceUrl(raw: string, allowLocal = false): string {
@@ -30,7 +30,7 @@ const sourceKey = (s: { id: string }) => `src${s.id.slice(0, 8)}`;
 export async function listSources(ctx: Ctx) {
   requireRole(ctx, [...EDITORS, 'sales_ops'], 'Viewing data sources');
   const rows = await ctx.db.admin.query<Omit<SourceRow, 'key_enc'> & { has_key: boolean; status: string; last_sync_at: string | null; last_error: string | null; stats: Record<string, unknown> }>(
-    `select id, name, template, base_url, key_enc is not null as has_key, status_map, seen_statuses, status, last_sync_at, last_error, synced_until, stats
+    `select id, name, template, base_url, key_enc is not null as has_key, dealer_scope, status_map, seen_statuses, status, last_sync_at, last_error, synced_until, stats
        from vt.data_sources where tenant_id = $1 order by created_at`, [ctx.tenantId]);
   return { canEdit: EDITORS.includes(ctx.role), stages: STAGES[ctx.industry].map(s => s.name), defaultMap: DEFAULT_STATUS_MAP[ctx.industry], sources: rows };
 }
@@ -46,7 +46,31 @@ async function fetchJson<T>(deps: Deps, url: string, key: string | null): Promis
   try { return await r.json() as T; } catch { throw new Error('The source did not return JSON.'); }
 }
 
-export async function createSource(deps: Deps, ctx: Ctx, body: { name?: unknown; template?: unknown; baseUrl?: unknown; key?: unknown }) {
+/** The dealers a source's set of ids covers: each chosen dealer, its branches (two levels down), and the older ids and codes they go by. */
+export function dealersInScope(dealers: FeedDealer[], scope: string[]): Set<string> {
+  if (!scope.length) return new Set();
+  const chosen = new Set(scope);
+  for (let round = 0; round < 3; round++) for (const d of dealers) if (d.parentDealerId && chosen.has(d.parentDealerId)) chosen.add(d.id);
+  const out = new Set<string>();
+  for (const d of dealers) if (chosen.has(d.id)) [d.id, d.legacyId, d.code].forEach(x => { if (x) out.add(x); });
+  return out;
+}
+
+/** Before connecting: check the address and key, and list the dealers, grouped under their parents, so the workspace can take only its own. */
+export async function checkSource(deps: Deps, ctx: Ctx, body: { template?: unknown; baseUrl?: unknown; key?: unknown }) {
+  requireRole(ctx, EDITORS, 'Connecting data sources');
+  const template = (typeof body.template === 'string' ? body.template : 'lead_feed_v1') as Template;
+  if (!(template in TEMPLATES)) throw new HttpError(400, 'Unknown source type.');
+  const baseUrl = checkSourceUrl(String(body.baseUrl ?? ''), !!deps.localSecret);
+  const key = typeof body.key === 'string' && body.key.trim() ? body.key.trim() : null;
+  const d = await fetchJson<{ dealers: FeedDealer[] }>(deps, `${baseUrl}${TEMPLATES[template].dealers}`, key).catch(e => { throw new HttpError(400, (e as Error).message); });
+  const all = d.dealers ?? [];
+  const ids = new Set(all.map(x => x.id));
+  const tops = all.filter(x => !x.parentDealerId || !ids.has(x.parentDealerId));
+  return { dealers: tops.map(t => ({ id: t.id, name: t.name || t.code || t.id, city: t.city ?? null, branches: all.filter(b => b.parentDealerId === t.id).map(b => ({ id: b.id, name: b.name, city: b.city ?? null })) })).sort((a, b) => a.name.localeCompare(b.name)) };
+}
+
+export async function createSource(deps: Deps, ctx: Ctx, body: { name?: unknown; template?: unknown; baseUrl?: unknown; key?: unknown; dealerScope?: unknown }) {
   requireRole(ctx, EDITORS, 'Connecting data sources');
   const secret = requireSecret(deps.secretKey);
   const name = typeof body.name === 'string' ? body.name.trim().slice(0, 80) : '';
@@ -58,17 +82,21 @@ export async function createSource(deps: Deps, ctx: Ctx, body: { name?: unknown;
   // try it before saving, so a wrong address or key is caught now, not overnight
   await fetchJson(deps, `${baseUrl}${TEMPLATES[template].dealers}`, key).catch(e => { throw new HttpError(400, (e as Error).message); });
   const [row] = await ctx.db.admin.query<{ id: string }>(
-    `insert into vt.data_sources (tenant_id, name, template, base_url, key_enc, status_map, created_by) values ($1,$2,$3,$4,$5,$6,$7)
+    `insert into vt.data_sources (tenant_id, name, template, base_url, key_enc, status_map, created_by, dealer_scope) values ($1,$2,$3,$4,$5,$6,$7,$8::text[])
      on conflict (tenant_id, name) do nothing returning id`,
-    [ctx.tenantId, name, template, baseUrl, key ? encrypt(secret, key) : null, JSON.stringify(DEFAULT_STATUS_MAP[ctx.industry]), ctx.userId]);
+    [ctx.tenantId, name, template, baseUrl, key ? encrypt(secret, key) : null, JSON.stringify(DEFAULT_STATUS_MAP[ctx.industry]), ctx.userId, scopeOf(body.dealerScope)]);
   if (!row) throw new HttpError(409, `A source called "${name}" already exists.`);
   const result = await syncSource(deps, ctx.tenantId, row.id);
   return { id: row.id, ...result };
 }
 
-export async function updateSource(deps: Deps, ctx: Ctx, id: string, body: { statusMap?: unknown; key?: unknown; baseUrl?: unknown; status?: unknown }) {
+const scopeOf = (x: unknown) => (Array.isArray(x) ? x.filter((v): v is string => typeof v === 'string' && !!v.trim()).map(v => v.trim().slice(0, 100)).slice(0, 200) : []);
+
+export async function updateSource(deps: Deps, ctx: Ctx, id: string, body: { statusMap?: unknown; key?: unknown; baseUrl?: unknown; status?: unknown; dealerScope?: unknown }) {
   requireRole(ctx, EDITORS, 'Changing data sources');
   const sets: string[] = [], vals: unknown[] = [id, ctx.tenantId];
+  // a changed set of dealers re-reads everything from the start
+  if (Array.isArray(body.dealerScope)) { vals.push(scopeOf(body.dealerScope)); sets.push(`dealer_scope = $${vals.length}::text[]`, 'synced_until = null'); }
   if (body.statusMap && typeof body.statusMap === 'object') {
     const stages = new Set(STAGES[ctx.industry].map(s => s.name));
     const map = Object.fromEntries(Object.entries(body.statusMap as Record<string, unknown>).filter(([k, v]) => k.trim() && typeof v === 'string' && (v === '' || stages.has(v))).map(([k, v]) => [k.trim().slice(0, 80), v as string]).filter(([, v]) => v));
@@ -110,8 +138,12 @@ export async function syncSource(deps: Deps, tenantId: string, id: string, budge
   try {
     // dealers and branches become partners
     const d = await fetchJson<{ dealers: FeedDealer[] }>(deps, `${src.base_url}${paths.dealers}`, key);
+    // limited to some dealers: only they become partners, and only their leads are read (others' customers are never stored)
+    const scope = src.dealer_scope ?? [];
+    const allowed = dealersInScope(d.dealers ?? [], scope);
+    const inScope = (id?: string | null) => !scope.length || (!!id && allowed.has(id));
     await deps.db.transaction(async sql => {
-      for (const x of d.dealers ?? []) {
+      for (const x of (d.dealers ?? []).filter(x => inScope(x.id))) {
         await sql.query(`insert into vt.partners (tenant_id, external_code, name, partner_type, city) values ($1,$2,$3,'dealer',$4)
           on conflict (tenant_id, external_code) do update set name = excluded.name, city = excluded.city`, [tenantId, `${sk}:${x.id}`, x.name || x.code || x.id, x.city || null]);
         // leads may name a dealer by its older id or code: same partner under those names too
@@ -119,7 +151,7 @@ export async function syncSource(deps: Deps, tenantId: string, id: string, budge
           on conflict (tenant_id, external_code) do nothing`, [tenantId, `${sk}:${alt}`, x.name || alt, x.city || null]);
       }
     });
-    out.dealers = d.dealers?.length ?? 0;
+    out.dealers = (d.dealers ?? []).filter(x => inScope(x.id)).length;
 
     // leads, from just before the last pull (a little overlap is harmless: writes are upserts)
     const since = src.synced_until ? new Date(Date.parse(src.synced_until) - 10 * 60_000).toISOString() : null;
@@ -131,6 +163,8 @@ export async function syncSource(deps: Deps, tenantId: string, id: string, budge
       await deps.db.transaction(async sql => {
         const partnerIds = new Map<string, string | null>();
         for (const lead of page.leads ?? []) {
+          if (lead.updatedAt && (!maxSeen || lead.updatedAt > maxSeen)) maxSeen = lead.updatedAt;
+          if (!inScope(lead.dealer?.id ?? null)) continue;
           const status = lead.progress?.status?.trim();
           if (status) seen[status] = (seen[status] ?? 0) + 1;
           const j = feedLeadToJourney(src.industry, lead, src.status_map ?? {}, sk);

@@ -5,7 +5,7 @@ import { ago, num } from '../format';
 import { IconRefresh } from '../icons';
 
 interface Source {
-  id: string; name: string; template: string; base_url: string; has_key: boolean;
+  id: string; name: string; template: string; base_url: string; has_key: boolean; dealer_scope: string[];
   status_map: Record<string, string>; seen_statuses: Record<string, number>;
   status: 'active' | 'error' | 'paused'; last_sync_at: string | null; last_error: string | null;
   stats: { dealers?: number; leadsLastPull?: number; newLeadsLastPull?: number; movedLastPull?: number };
@@ -67,7 +67,7 @@ export function Sources({ workspaceId, notify, reload }: { workspaceId: string; 
                 <div className="row-main">
                   <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
                     <span className={`conn`} style={{ padding: '4px 10px', cursor: 'default' }}><span className={`dot ${s.status === 'error' ? 'warn' : s.status === 'paused' ? 'off' : 'ok'}`} />{s.status === 'error' ? 'Problem' : s.status === 'paused' ? 'Paused' : 'Connected'}</span>
-                    <span style={{ minWidth: 0 }}><b>{s.name}</b> <span className="muted small">{new URL(s.base_url).host}</span></span>
+                    <span style={{ minWidth: 0 }}><b>{s.name}</b> <span className="muted small">{new URL(s.base_url).host}{s.dealer_scope?.length ? ` · only the chosen ${s.dealer_scope.length === 1 ? 'dealer group' : `${s.dealer_scope.length} dealer groups`} and their branches` : ''}</span></span>
                   </span>
                   <span className="toolbar">
                     <button className="btn small" onClick={() => sync(s)} disabled={busy === s.id}><IconRefresh />{busy === s.id ? 'Pulling…' : 'Pull now'}</button>
@@ -90,34 +90,74 @@ export function Sources({ workspaceId, notify, reload }: { workspaceId: string; 
   );
 }
 
+interface FeedDealerGroup { id: string; name: string; city: string | null; branches: { id: string; name: string; city: string | null }[] }
+
+/** Connect in two steps: check the address and key, then choose whose leads belong to this workspace. */
 function AddSource({ T, onDone }: { T: string; onDone: (msg: string | null) => void }) {
   const [name, setName] = useState('Dealer dashboard');
-  const [url, setUrl] = useState('');
+  const [url, setUrl] = useState('https://compareauto.in/api/vtology');
   const [key, setKey] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<'check' | 'connect' | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  async function submit(e: React.FormEvent) {
+  const [groups, setGroups] = useState<FeedDealerGroup[] | null>(null);
+  const [all, setAll] = useState(false);
+  const [pick, setPick] = useState<Set<string>>(new Set());
+  const [q, setQ] = useState('');
+  async function check(e: React.FormEvent) {
     e.preventDefault();
-    setBusy(true); setErr(null);
+    setBusy('check'); setErr(null);
     try {
-      const r = await api<{ dealers: number; leads: number; newLeads: number; unmapped: string[] }>('POST', `${T}/sources`, { name, template: 'lead_feed_v1', baseUrl: url, key });
+      const r = await api<{ dealers: FeedDealerGroup[] }>('POST', `${T}/sources/check`, { template: 'lead_feed_v1', baseUrl: url, key });
+      setGroups(r.dealers);
+      if (r.dealers.length === 1) setPick(new Set([r.dealers[0]!.id]));
+    } catch (e2) { setErr(e2 instanceof ApiError ? e2.message : 'Could not reach the source.'); }
+    finally { setBusy(null); }
+  }
+  async function connect() {
+    setBusy('connect'); setErr(null);
+    try {
+      const r = await api<{ dealers: number; leads: number; newLeads: number; unmapped: string[] }>('POST', `${T}/sources`, { name, template: 'lead_feed_v1', baseUrl: url, key, dealerScope: all ? [] : [...pick] });
       onDone(`Connected ${name}: ${num(r.dealers)} dealers and branches, ${num(r.leads)} leads.${r.unmapped.length ? ` Map these statuses to stages: ${r.unmapped.join(', ')}.` : ''}`);
     } catch (e2) { setErr(e2 instanceof ApiError ? e2.message : 'Could not connect.'); }
-    finally { setBusy(false); }
+    finally { setBusy(null); }
   }
+  const shown = (groups ?? []).filter(g => !q.trim() || `${g.name} ${g.city ?? ''} ${g.branches.map(b => b.name).join(' ')}`.toLowerCase().includes(q.trim().toLowerCase()));
   return (
-    <form onSubmit={submit} className="note-box" style={{ display: 'grid', gap: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-      <b>Connect a source that speaks the Vtology lead feed</b>
-      <span className="small muted">Your developer sets the feed up on your system (CompareAuto’s is at /api/vtology) and gives you its address and key. The key is stored encrypted; nobody can read it back.</span>
-      <div className="grid-2" style={{ gap: 12 }}>
-        <label className="field">Name<input className="input" value={name} onChange={e => setName(e.target.value)} required maxLength={80} /></label>
-        <label className="field">Feed address<input className="input" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://compareauto.in/api/vtology" required /></label>
-      </div>
-      <label className="field">Key<input className="input" type="password" autoComplete="off" value={key} onChange={e => setKey(e.target.value)} placeholder="The VTOLOGY_FEED_KEY your developer set" required /></label>
-      {err && <div className="error-box" role="alert">{err}</div>}
-      {busy && <div><div className="progress" /><p className="muted small" style={{ marginTop: 6 }}>Checking the address and key, then pulling dealers and leads…</p></div>}
-      <div className="toolbar"><button className="btn primary" type="submit" disabled={busy}>Connect and pull</button><button type="button" className="btn" onClick={() => onDone(null)} disabled={busy}>Cancel</button></div>
-    </form>
+    <div className="note-box" style={{ display: 'grid', gap: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+      {!groups ? (
+        <form onSubmit={check} style={{ display: 'grid', gap: 12 }}>
+          <b>Connect a source that speaks the Vtology lead feed</b>
+          <span className="small muted">Your developer sets the feed up on your system (CompareAuto’s is at https://compareauto.in/api/vtology) and gives you its key. The key is stored encrypted; nobody can read it back.</span>
+          <div className="grid-2" style={{ gap: 12 }}>
+            <label className="field">Name<input className="input" value={name} onChange={e => setName(e.target.value)} required maxLength={80} /></label>
+            <label className="field">Feed address<input className="input" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://compareauto.in/api/vtology" required /></label>
+          </div>
+          <label className="field">Key<input className="input" type="password" autoComplete="off" value={key} onChange={e => setKey(e.target.value)} placeholder="The VTOLOGY_FEED_KEY your developer set" required /></label>
+          {err && <div className="error-box" role="alert">{err}</div>}
+          <div className="toolbar"><button className="btn primary" type="submit" disabled={!!busy}>{busy ? 'Checking…' : 'Check and continue'}</button><button type="button" className="btn" onClick={() => onDone(null)} disabled={!!busy}>Cancel</button></div>
+        </form>
+      ) : (
+        <div style={{ display: 'grid', gap: 12 }}>
+          <b>Whose leads belong to this workspace?</b>
+          <span className="small muted">The feed carries {groups.length} dealer {groups.length === 1 ? 'group' : 'groups'}. Choose the ones this workspace is for: their branches come with them, and leads of every other dealer are never read or stored.</span>
+          {groups.length > 6 && <input className="input" style={{ maxWidth: 320 }} value={q} onChange={e => setQ(e.target.value)} placeholder="Find a dealer" />}
+          <div className="dealer-pick">{shown.map(g => (
+            <label key={g.id} className={`dealer-opt ${!all && pick.has(g.id) ? 'on' : ''}`}>
+              <input type="checkbox" disabled={all} checked={!all && pick.has(g.id)} onChange={e => setPick(p => { const n = new Set(p); if (e.target.checked) n.add(g.id); else n.delete(g.id); return n; })} />
+              <span><b>{g.name}</b>{g.city ? <span className="muted small"> · {g.city}</span> : null}
+                {g.branches.length > 0 && <span className="small muted" style={{ display: 'block' }}>with {g.branches.map(b => b.name).join(', ')}</span>}</span>
+            </label>
+          ))}</div>
+          <label className="small" style={{ display: 'flex', gap: 8, alignItems: 'center' }}><input type="checkbox" checked={all} onChange={e => setAll(e.target.checked)} /> Every dealer (for the platform’s own workspace, such as CompareAuto’s)</label>
+          {err && <div className="error-box" role="alert">{err}</div>}
+          {busy === 'connect' && <div><div className="progress" /><p className="muted small" style={{ marginTop: 6 }}>Pulling dealers and leads…</p></div>}
+          <div className="toolbar">
+            <button className="btn primary" onClick={connect} disabled={!!busy || (!all && !pick.size)}>{all ? 'Connect every dealer' : `Connect ${pick.size || ''} ${pick.size === 1 ? 'dealer group' : 'dealer groups'}`}</button>
+            <button className="btn" onClick={() => setGroups(null)} disabled={!!busy}>Back</button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

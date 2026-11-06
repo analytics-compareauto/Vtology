@@ -753,3 +753,7 @@ td.num, th.num { white-space: nowrap; }
 .chain-legend span { display: flex; align-items: center; gap: 6px; font-size: 12.5px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chain-legend span i { flex: none; width: 8px; height: 8px; border-radius: 2px; position: static; display: inline-block; }
 .chain-legend span b { margin-left: auto; font-weight: 600; color: var(--ink-2); }
+.dealer-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 8px; max-height: 320px; overflow: auto; }
+.dealer-opt { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); cursor: pointer; }
+.dealer-opt.on { border-color: var(--flow); background: var(--flow-soft); }
+.dealer-opt input { margin-top: 3px; }
